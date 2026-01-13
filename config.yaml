@@ -28,14 +28,14 @@ thresholds:
   
   # 2. Silent-Face 紋理活體門檻 (0.0 ~ 1.0)
   # 建議值 0.85 ~ 0.95，數值越高對翻拍影片的防禦越強，但對光線要求也越高
-  texture_liveness: 0.95
+  texture_liveness: 0.85
   
   # 3. MediaPipe 偵測信心度
   detection_confidence: 0.6
   tracking_confidence: 0.6
 
   # 4. 人臉辨識相關門檻
-  recognition_confidence: 0.5
+  recognition_confidence: 0.7
   evolution_confidence: 0.92
 
 # 人臉辨識核心參數設定
