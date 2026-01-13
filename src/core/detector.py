@@ -3,16 +3,16 @@ import mediapipe as mp
 import numpy as np
 import yaml
 import os
-from collections import deque
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
-from .liveness_engine import SilentFaceAnalyzer
+from liveness_engine import SilentFaceAnalyzer
 
 class FaceDetector:
     """
-    採用 MediaPipe 最新 Tasks API 的偵測器。
-    整合 3D 結構視差、眼部微震顫以及 Silent-Face 深度學習紋理檢測，
-    雙重過濾影片、照片與 3D 翻拍攻擊。
+    極簡優化 + CLAHE 強化版偵測器。
+    MediaPipe：負責穩定的人臉追蹤與裁剪。
+    CLAHE：強化低畫質鏡頭下的皮膚紋理細節。
+    Silent-Face：負責核心真偽判定。
     """
     def __init__(self, config_path="config.yaml"):
         # 載入設定
@@ -22,72 +22,47 @@ class FaceDetector:
         # 讀取配置參數
         model_path = self.config.get('database', {}).get('model_path', 'models/face_landmarker.task')
         det_confidence = self.config.get('thresholds', {}).get('detection_confidence', 0.6)
-        liveness_score_threshold = self.config.get('thresholds', {}).get('liveness_score', 1.0)
-        # 讀取 Silent-Face 的門檻值 (預設 0.9)
-        self.texture_threshold = self.config.get('thresholds', {}).get('texture_liveness', 0.9)
         
-        # 檢查模型文件
-        if not os.path.exists(model_path):
-            os.makedirs(os.path.dirname(model_path), exist_ok=True)
-
-        # 1. MediaPipe Tasks 設定
+        # 針對低畫質鏡頭，門檻建議設在 0.85 ~ 0.9 之間
+        self.texture_threshold = self.config.get('thresholds', {}).get('texture_liveness', 0.95)
+        
+        # 1. MediaPipe Tasks 設定 (僅用於定位)
         base_options = python.BaseOptions(model_asset_path=model_path)
         options = vision.FaceLandmarkerOptions(
             base_options=base_options,
             running_mode=vision.RunningMode.IMAGE,
-            num_faces=2,
-            min_face_detection_confidence=det_confidence,
-            output_face_blendshapes=True,
-            output_facial_transformation_matrixes=True
+            num_faces=1,
+            min_face_detection_confidence=det_confidence
         )
         self.landmarker = vision.FaceLandmarker.create_from_options(options)
         
-        # 2. 初始化 Silent-Face 紋理分析器 (傳入 config_path 以讀取 device_mode)
+        # 2. 初始化 Silent-Face 紋理分析器
         self.silent_face_analyzer = SilentFaceAnalyzer(config_path=config_path)
         
-        # 活體檢測參數
-        self.liveness_score = 0.0
-        self.liveness_threshold = liveness_score_threshold
-        self.history_landmarks = deque(maxlen=20)
+        # 3. 初始化 CLAHE 工具 (用於預處理)
+        self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        
+        # 狀態變數
         self.is_locked = False
-        self.NOSE_TIP = 1 
+        self.texture_pass_count = 0  # 連續通過計數器
+        self.REQUIRED_PASS_FRAMES = 10 # 需連續通過 10 幀
 
-    def _check_3d_parallax(self, landmarks):
-        """核心防偽：3D 視差檢查"""
-        if len(self.history_landmarks) < 5:
-            return 0.0
-        
-        curr_nose = np.array([landmarks[self.NOSE_TIP].x, landmarks[self.NOSE_TIP].y, landmarks[self.NOSE_TIP].z])
-        prev_nose = self.history_landmarks[-2][self.NOSE_TIP]
-        
-        nose_move = np.linalg.norm(curr_nose[:2] - prev_nose[:2])
-        if nose_move < 0.001: return -0.05 # 靜止扣分
-
-        depth_changes = []
-        for idx in [33, 263, 152, 10]:
-            curr_pt = np.array([landmarks[idx].x, landmarks[idx].y])
-            prev_pt = self.history_landmarks[-2][idx][:2]
-            pt_move = np.linalg.norm(curr_pt - prev_pt)
-            if pt_move > 0:
-                depth_changes.append(nose_move / pt_move)
-        
-        if not depth_changes: return 0.0
-
-        std_val = np.std(depth_changes)
-        # 強化門檻：避開螢幕晃動的小位移
-        if 0.005 < std_val < 0.08: return 0.15 
-        return 0.0
-
-    def _calculate_ear(self, landmarks, w, h):
-        """計算平均眼睛外觀比例 (EAR)"""
-        def get_ear(indices):
-            pts = [np.array([landmarks[i].x * w, landmarks[i].y * h]) for i in indices]
-            v = np.linalg.norm(pts[1] - pts[5]) + np.linalg.norm(pts[2] - pts[4])
-            h_dist = np.linalg.norm(pts[0] - pts[3])
-            return v / (2.0 * h_dist)
-        l_ear = get_ear([362, 385, 387, 263, 373, 380])
-        r_ear = get_ear([33, 160, 158, 133, 153, 144])
-        return (l_ear + r_ear) / 2.0
+    def _preprocess_face(self, face_crop):
+        """影像預處理：強化紋理以補償筆電鏡頭的不足"""
+        try:
+            # 1. 轉到 LAB 色彩空間強化亮度對比
+            lab = cv2.cvtColor(face_crop, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            l_enhanced = self.clahe.apply(l)
+            enhanced_bgr = cv2.cvtColor(cv2.merge((l_enhanced, a, b)), cv2.COLOR_LAB2BGR)
+            
+            # 2. 輕微銳化：抵消筆電鏡頭過度降噪導致的「油畫感」
+            kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+            enhanced_bgr = cv2.filter2D(enhanced_bgr, -1, kernel)
+            
+            return enhanced_bgr
+        except:
+            return face_crop
 
     def process(self, frame):
         h, w, _ = frame.shape
@@ -98,59 +73,52 @@ class FaceDetector:
         if not result.face_landmarks:
             self.reset_liveness()
             return "NO_FACE", None
-        
-        if len(result.face_landmarks) > 1:
-            return "MULTIPLE_FACES", None
             
         landmarks = result.face_landmarks[0]
-        curr_pts = np.array([[lm.x, lm.y, lm.z] for lm in landmarks])
-        self.history_landmarks.append(curr_pts)
-
-        # 計算 BBox (用於後續 Silent-Face 裁剪)
         x_coords = [lm.x for lm in landmarks]
         y_coords = [lm.y for lm in landmarks]
-        bbox = [int(min(x_coords)*w), int(min(y_coords)*h), int(max(x_coords)*w), int(max(y_coords)*h)]
+        x1, y1, x2, y2 = int(min(x_coords)*w), int(min(y_coords)*h), int(max(x_coords)*w), int(max(y_coords)*h)
+        bbox = [x1, y1, x2, y2]
 
-        # --- 雙重活體檢測邏輯 ---
         if not self.is_locked:
-            # 1. 第一層：幾何動作分析 (CPU 輕量計算)
-            self.liveness_score += self._check_3d_parallax(landmarks)
-            ear = self._calculate_ear(landmarks, w, h)
-            if 0.1 < ear < 0.22:
-                self.liveness_score += 0.1
-            
-            self.liveness_score = max(0.0, min(self.liveness_score, 1.2))
+            face_w = x2 - x1
+            if face_w < (w * 0.2):
+                return "TOO_FAR", {"bbox": bbox}
 
-            # 2. 第二層：當幾何分數達標，觸發深度學習紋理檢查
-            if self.liveness_score >= self.liveness_threshold:
-                # 裁剪臉部影像
-                x1, y1, x2, y2 = bbox
-                # 確保裁剪座標不超出範圍
-                face_crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+            face_crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
+            
+            if face_crop.size > 0:
+                # --- 執行 CLAHE 與銳化預處理 ---
+                processed_face = self._preprocess_face(face_crop)
                 
-                if face_crop.size > 0:
-                    # 執行 Silent-Face 推論 (此部分會讀取 config.yaml 決定使用 CPU/GPU)
-                    texture_score = self.silent_face_analyzer.predict(face_crop)
-                    
-                    if texture_score >= self.texture_threshold:
-                        self.is_locked = True # 雙重通過，鎖定
-                    else:
-                        # 幾何雖過但紋理不合格 (手機錄影常見特徵)
-                        self.liveness_score = 0.4 # 強制降分重測
-                        self.is_locked = False
-        else:
-            self.liveness_score = self.liveness_threshold
+                # 計算亮度進行動態補償
+                avg_brightness = np.mean(cv2.cvtColor(processed_face, cv2.COLOR_BGR2GRAY))
+                current_threshold = self.texture_threshold
+                if avg_brightness < 70: # 環境太暗時自動微降門檻
+                    current_threshold -= 0.05
+
+                texture_score = self.silent_face_analyzer.predict(processed_face)
+                
+                if texture_score >= current_threshold:
+                    self.texture_pass_count += 1
+                else:
+                    self.texture_pass_count = 0 
+                
+                if self.texture_pass_count >= self.REQUIRED_PASS_FRAMES:
+                    self.is_locked = True
+            
+        progress = min(int((self.texture_pass_count / self.REQUIRED_PASS_FRAMES) * 100), 100)
+        if self.is_locked: progress = 100
 
         return "SUCCESS", {
             "bbox": bbox,
             "is_live": self.is_locked,
-            "liveness_percent": min(int(self.liveness_score * 100), 100)
+            "liveness_percent": progress
         }
 
     def reset_liveness(self):
-        self.liveness_score = 0.0
         self.is_locked = False
-        self.history_landmarks.clear()
+        self.texture_pass_count = 0
 
     def __del__(self):
         if hasattr(self, 'landmarker'):
@@ -169,9 +137,10 @@ if __name__ == "__main__":
         status, res = detector.process(frame)
         
         if status == "SUCCESS":
+            # 綠框代表真人鎖定，橘框代表判定中
             color = (0, 255, 0) if res['is_live'] else (0, 165, 255)
             cv2.rectangle(frame, (res['bbox'][0], res['bbox'][1]), (res['bbox'][2], res['bbox'][3]), color, 2)
-            cv2.putText(frame, f"Tasks 3D Liveness: {res['liveness_percent']}%", (10, 30), 
+            cv2.putText(frame, f"Liveness: {res['liveness_percent']}%", (10, 30), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
         else:
             cv2.putText(frame, f"Status: {status}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
