@@ -41,3 +41,5 @@ thresholds:
 # 人臉辨識核心參數設定
 recognition:
   distance_threshold: 0.4
+  base_weight: 0.4
+  dynamic_weight: 0.6

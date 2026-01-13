@@ -24,9 +24,14 @@ class FaceRecognizer:
         self.db = AttendanceDB(config_path=config_path)
         self.img_tool = ImagePreprocessor()
         
-        # [cite_start]3. 讀取門檻值 [cite: 11]
+        # 3. 讀取門檻值
         self.rec_threshold = self.config.get('thresholds', {}).get('recognition_confidence', 0.5)
         self.evo_threshold = self.config.get('thresholds', {}).get('evolution_confidence', 0.92)
+
+        # 4. 讀取辨識權重與距離門檻
+        self.base_weight = self.config.get('recognition', {}).get('base_weight', 0.4)
+        self.dynamic_weight = self.config.get('recognition', {}).get('dynamic_weight', 0.6)
+        self.dist_threshold = self.config.get('recognition', {}).get('distance_threshold', 0.4)
 
     def extract_feature(self, aligned_face):
         """從對齊後的 112x112 影像提取 512 維特徵"""
@@ -41,8 +46,7 @@ class FaceRecognizer:
 
     def identify(self, processed_face):
         """
-        執行 1:N 加權比對邏輯
-        :param processed_face: 經過 image_tool 強化與對齊後的人臉影像
+        執行 1:N 加權比對邏輯 (使用 config.yaml 設定之權重)
         """
         live_feat = self.extract_feature(processed_face)
         if live_feat is None:
@@ -57,16 +61,16 @@ class FaceRecognizer:
             base_feat = data['base']
             dynamic_feat = data['dynamic']
             
-            # [cite_start]--- 特徵加權融合邏輯 --- [cite: 11]
+            # --- 動態權重融合邏輯 ---
             if dynamic_feat is not None:
-                # 權重分配：Base 0.4, Dynamic 0.6 (側重近況)
-                fused_feat = (base_feat * 0.4) + (dynamic_feat * 0.6)
-                # 融合後必須重新歸一化
+                # 使用 config 中的權重進行融合 
+                fused_feat = (base_feat * self.base_weight) + (dynamic_feat * self.dynamic_weight)
+                # 融合後必須重新歸一化以維持單位向量 
                 fused_feat = fused_feat / np.linalg.norm(fused_feat)
             else:
                 fused_feat = base_feat
             
-            # 計算各項得分
+            # 計算分數
             fused_score = self.compute_similarity(live_feat, fused_feat)
             base_score = self.compute_similarity(live_feat, base_feat)
             dyn_score = self.compute_similarity(live_feat, dynamic_feat) if dynamic_feat is not None else 0.0
@@ -82,7 +86,6 @@ class FaceRecognizer:
 
         # 檢查是否達到辨識門檻
         if max_fused_score >= self.rec_threshold:
-            # [cite_start]判斷是否觸發「特徵演進」機制 [cite: 11]
             should_evolve = max_fused_score >= self.evo_threshold
             return best_match_id, max_fused_score, should_evolve, final_details
         
