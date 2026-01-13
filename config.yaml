@@ -1,0 +1,46 @@
+# EvoFace-Attendance 專案設定檔
+
+# 系統硬體與全域設定
+system:
+  # 攝影機索引 (預設為 0)
+  camera_index: 0
+  app_name: "EvoFace - AI 人臉辨識考勤系統"
+  # 推論硬體模式: "auto" (自動偵測), "gpu" (強制 GPU), "cpu" (強制 CPU)
+  device_mode: "auto"
+
+# 資料庫與模型路徑設定
+database:
+  # SQLite 資料庫儲存路徑
+  db_path: "data/attendance.db"
+  # 打卡時擷取的臉部影像儲存目錄
+  image_save_path: "data/faces/"
+  # MediaPipe Tasks 人臉關鍵點模型路徑
+  # 下載網址: https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
+  model_path: "models/face_landmarker.task"
+
+# 考勤邏輯設定
+attendance:
+  # 相同員工連續打卡的冷卻時間 (分鐘)，防止誤觸導致重複打卡
+  debounce_minutes: 5
+
+# 演算法門檻值設定
+thresholds:
+  # 1. 活體檢測通過門檻 (1.0 = 100%)
+  # 建議範圍 0.8 ~ 1.2，數值越高越嚴格，整合後採 1.0 以確保安全性
+  liveness_score: 1.0
+  
+  # 2. MediaPipe 偵測信心度 (0.0 ~ 1.0)
+  detection_confidence: 0.6
+  tracking_confidence: 0.6
+
+  # 3. 人臉辨識相關門檻
+  # 辨識信心度基礎閥值
+  recognition_confidence: 0.5
+  # 特徵演進觸發門檻 (達到此高信心度才執行自動特徵演進)
+  evolution_confidence: 0.92
+
+# 人臉辨識核心參數設定
+recognition:
+  # 特徵向量比對門檻 (Cosine Similarity / Distance)
+  # 通常 InsightFace 模型在 0.4 以上可視為同一人
+  distance_threshold: 0.4
