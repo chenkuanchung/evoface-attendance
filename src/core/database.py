@@ -8,6 +8,7 @@ from datetime import datetime, date
 class AttendanceDB:
     """
     負責 SQLite 資料庫的初始化、員工特徵管理與打卡紀錄存取。
+    V2.1 支援詳細得分 (Base/Dynamic) 儲存與特徵演進紀錄。
     """
     def __init__(self, config_path="config.yaml"):
         # 載入設定檔
@@ -48,13 +49,16 @@ class AttendanceDB:
                 )
             ''')
             
-            # 2. 打卡紀錄表
+            # 2. 打卡紀錄表 (V2.1 新增 base_score, dynamic_score 用於效能分析)
+            # 注意：若已存在舊資料庫，請手動刪除 data/attendance.db 以套用新欄位
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS logs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     employee_id TEXT,
                     timestamp DATETIME,
                     confidence REAL,
+                    base_score REAL,
+                    dynamic_score REAL,
                     photo_path TEXT,
                     FOREIGN KEY (employee_id) REFERENCES employees (employee_id)
                 )
@@ -68,7 +72,6 @@ class AttendanceDB:
         :param name: 員工姓名
         :param feature_vector: numpy array (512,)
         """
-        # 將 numpy array 轉為 JSON 字串儲存
         feature_json = json.dumps(feature_vector.tolist())
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -81,14 +84,11 @@ class AttendanceDB:
     def delete_employee(self, emp_id):
         """
         註銷/刪除員工及其所有打卡紀錄
-        :param emp_id: 員工編號
         """
         with self._get_connection() as conn:
             cursor = conn.cursor()
             try:
-                # 1. 刪除該員工的打卡紀錄 (避免外鍵關聯導致的問題)
                 cursor.execute('DELETE FROM logs WHERE employee_id = ?', (emp_id,))
-                # 2. 刪除員工基本資料與特徵
                 cursor.execute('DELETE FROM employees WHERE employee_id = ?', (emp_id,))
                 conn.commit()
                 return True, f"員工 {emp_id} 已成功註銷。"
@@ -112,7 +112,6 @@ class AttendanceDB:
     def load_all_employees(self):
         """
         讀取所有員工資料用於辨識比對
-        返回: { emp_id: { 'name': str, 'base': np.array, 'dynamic': np.array/None } }
         """
         employees = {}
         with self._get_connection() as conn:
@@ -127,11 +126,17 @@ class AttendanceDB:
                 }
         return employees
 
-    def add_attendance_log(self, emp_id, confidence, photo_path):
+    def add_attendance_log(self, emp_id, confidence, photo_path, details=None):
         """
-        記錄一次打卡，包含精準的秒級去抖動 (Debounce) 邏輯
+        記錄一次打卡，包含去抖動邏輯與詳細得分紀錄
+        :param details: 包含 base_score 與 dynamic_score 的字典
         """
         now = datetime.now()
+        
+        # 提取詳細分數 (由 Recognizer 提供)
+        base_s = details.get('base_score', 0.0) if details else 0.0
+        dyn_s = details.get('dynamic_score', 0.0) if details else 0.0
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
             
@@ -144,26 +149,23 @@ class AttendanceDB:
             last_log = cursor.fetchone()
             
             if last_log:
-                # 處理 SQLite 存儲的時間格式相容性
                 try:
                     last_time = datetime.strptime(last_log[0], '%Y-%m-%d %H:%M:%S.%f')
                 except ValueError:
                     last_time = datetime.strptime(last_log[0], '%Y-%m-%d %H:%M:%S')
                 
-                # 計算已過去的總秒數
                 elapsed_seconds = (now - last_time).total_seconds()
                 debounce_seconds = self.debounce_min * 60
                 
                 if elapsed_seconds < debounce_seconds:
-                    # 計算剩餘秒數，提供更精準的 UI 反饋
                     remaining = int(debounce_seconds - elapsed_seconds)
                     return False, f"打卡過於頻繁，請於 {remaining} 秒後再試。"
 
-            # 插入新紀錄
+            # 插入新紀錄 (包含新欄位)
             cursor.execute('''
-                INSERT INTO logs (employee_id, timestamp, confidence, photo_path)
-                VALUES (?, ?, ?, ?)
-            ''', (emp_id, now, confidence, photo_path))
+                INSERT INTO logs (employee_id, timestamp, confidence, base_score, dynamic_score, photo_path)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (emp_id, now, confidence, base_s, dyn_s, photo_path))
             conn.commit()
             return True, "打卡成功"
 
@@ -214,7 +216,6 @@ class AttendanceDB:
                 })
         return logs
 
-# 快速測試腳本
 if __name__ == "__main__":
     db = AttendanceDB()
     print("資料庫模組載入成功。")

@@ -14,7 +14,7 @@ database:
   image_save_path: "data/faces/"
   # MediaPipe Tasks 人臉關鍵點模型路徑
   model_path: "models/face_landmarker.task"
-  # [新增] Silent-Face 活體防禦模型路徑 (ONNX 格式)
+  # Silent-Face 活體防禦模型路徑 (ONNX 格式)
   liveness_model: "models/liveness/2.7_80x80_MiniFASNetV2.onnx"
 
 # 考勤邏輯設定
@@ -26,7 +26,7 @@ thresholds:
   # 1. 幾何活體檢測門檻 (動作與視差累積)
   liveness_score: 1.0
   
-  # [新增] 2. Silent-Face 紋理活體門檻 (0.0 ~ 1.0)
+  # 2. Silent-Face 紋理活體門檻 (0.0 ~ 1.0)
   # 建議值 0.85 ~ 0.95，數值越高對翻拍影片的防禦越強，但對光線要求也越高
   texture_liveness: 0.95
   
