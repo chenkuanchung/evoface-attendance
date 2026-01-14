@@ -86,7 +86,9 @@ class FaceDetector:
                     [points[291].x * w, points[291].y * h]
                 ]
                 aligned_face = self.img_tool.align_face(frame, landmarks_5pt, is_masked=False)
+                #cv2.imshow("aligned_face (Debug)", aligned_face)
                 recognition_face = self.img_tool.enhance_face(aligned_face)
+                #cv2.imshow("recognition_face (Debug)", recognition_face)
 
             if not self.is_locked:
                 # 使用帶有 Padding 的區域進行活體偵測
