@@ -34,10 +34,16 @@ class FaceRecognizer:
         self.dist_threshold = self.config.get('recognition', {}).get('distance_threshold', 0.4)
 
     def extract_feature(self, aligned_face):
-        """從對齊後的 112x112 影像提取 512 維特徵"""
+        """
+        從對齊後的 112x112 影像提取 512 維特徵。
+        優化點：由於 aligned_face 已經是 112x112，
+        可以考慮在 App 準備時固定偵測大小以加速。
+        """
         faces = self.app.get(aligned_face)
         if not faces:
+            # 如果 112x112 的圖還抓不到臉，嘗試直接回傳 None
             return None
+        # 確保回傳的是 normed_embedding
         return faces[0].normed_embedding
 
     def compute_similarity(self, feat1, feat2):
@@ -50,7 +56,7 @@ class FaceRecognizer:
         """
         live_feat = self.extract_feature(processed_face)
         if live_feat is None:
-            return None, 0.0, False, {}
+            return None, 0.0, False, {}, None
 
         all_employees = self.db.load_all_employees()
         best_match_id = None
@@ -87,19 +93,25 @@ class FaceRecognizer:
         # 檢查是否達到辨識門檻
         if max_fused_score >= self.rec_threshold:
             should_evolve = max_fused_score >= self.evo_threshold
-            return best_match_id, max_fused_score, should_evolve, final_details
+            return best_match_id, max_fused_score, should_evolve, final_details, live_feat
         
-        return None, max_fused_score, False, final_details
+        return None, max_fused_score, False, final_details, live_feat
 
-    def process_attendance(self, emp_id, score, should_evolve, face_img, photo_path, details):
-        """處理打卡儲存與演進"""
-        # 調用資料庫記錄 (注意：需配合稍後第三步修改的 database.py)
+    def process_attendance(self, emp_id, score, should_evolve, live_feat, photo_path, details):
+        """
+        處理打卡儲存與演進。
+        直接傳入 identify 階段已取得的 live_feat
+        """
         success, message = self.db.add_attendance_log(emp_id, score, photo_path, details)
         
         if success and should_evolve:
-            new_feat = self.extract_feature(face_img)
-            if new_feat is not None:
-                self.db.update_dynamic_feature(emp_id, new_feat) 
+            # 額外安全性檢查：若原始特徵比對分數過低 (可能戴口罩)，則不更新動態特徵
+            base_s = details.get('base_score', 0.0)
+            if base_s < 0.4:
+                return success, message + " (辨識成功，但因遮擋嚴重跳過特徵演進)"
+
+            if live_feat is not None:
+                self.db.update_dynamic_feature(emp_id, live_feat) 
                 message += " (特徵已進化)"
         
         return success, message
@@ -121,7 +133,7 @@ if __name__ == "__main__":
     print("\n[開始進行 1:N 辨識測試...]")
     
     # 3. 執行辨識
-    emp_id, score, evolve, details = recognizer.identify(test_img)
+    emp_id, score, evolve, details, live_feat = recognizer.identify(test_img)
 
     # 4. 輸出結果分析
     if emp_id:
