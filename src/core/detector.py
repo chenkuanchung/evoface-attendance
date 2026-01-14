@@ -39,15 +39,36 @@ class FaceDetector:
         self.texture_pass_count = 0 
         self.REQUIRED_PASS_FRAMES = 5
 
-    def check_mask_status(self, landmarks, frame_h, frame_w):
-        """
-        簡單的口罩判斷邏輯：檢查鼻子與中心區域
-        """
-        # 索引 4 為鼻尖
-        nose = landmarks[4]
-        if nose.y > 0.9 or nose.y < 0.1:
-            return True
-        return False
+    def check_mask_status(self, landmarks, frame, actual_bbox):
+            # 1. 點位重合度判斷：稍微調降門檻 (0.003 -> 0.0015)
+            # MediaPipe 在沒戴口罩且閉嘴時，lip_gap 可能就很小
+            lip_gap = abs(landmarks[13].y - landmarks[14].y)
+            
+            # 2. 物理紋理判斷 (標準差)：
+            x1, y1, x2, y2 = actual_bbox
+            # 調整 ROI：取臉部高度的 70% 到 85% 處 (這區間一定有嘴唇或口罩中心)
+            roi_y1 = int(y1 + (y2 - y1) * 0.70)
+            roi_y2 = int(y1 + (y2 - y1) * 0.85)
+            roi = frame[roi_y1:roi_y2, x1:x2]
+            
+            std_val = 100.0 # 預設一個大值(代表非口罩)
+            if roi.size > 0:
+                gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                _, stddev = cv2.meanStdDev(gray_roi)
+                std_val = stddev[0][0]
+
+            # === 調節區 ===
+            # 建議觀察這裡的 print 數值
+            # 沒戴口罩真人通常 Std 會在 12~25
+            # 戴口罩（平面顏色）通常 Std 會在 2~8
+            # print(f"Gap: {lip_gap:.5f} | Std: {std_val:.2f}")
+
+            # 放寬判定門檻：
+            # 1. lip_gap 只有在極度重合(0.001)時才懷疑
+            # 2. std_val 降到 10.0 (這代表顏色非常死板)
+            if lip_gap < 0.001 or std_val < 10.0:
+                return True
+            return False
 
     def process(self, frame):
             h, w, _ = frame.shape
@@ -58,6 +79,11 @@ class FaceDetector:
             if not result.face_landmarks:
                 self.reset_liveness()
                 return "NO_FACE", None
+            
+            if len(result.face_landmarks) > 1:
+                self.reset_liveness()
+                # 回傳多臉錯誤，讓 UI 提示「請確保畫面只有一人」
+                return "MULTIPLE_FACES", None
                 
             points = result.face_landmarks[0]
             
@@ -65,7 +91,9 @@ class FaceDetector:
             x_coords = [p.x * w for p in points]
             y_coords = [p.y * h for p in points]
             actual_bbox = [int(min(x_coords)), int(min(y_coords)), int(max(x_coords)), int(max(y_coords))]
-            is_masked = self.check_mask_status(points, h, w)
+            #is_masked = self.check_mask_status(points, h, w)
+            is_masked = self.check_mask_status(points, frame, actual_bbox)
+            #print(is_masked)
             
             landmarks_5pt = [
                 [points[468].x * w, points[468].y * h], [points[473].x * w, points[473].y * h],
@@ -94,8 +122,7 @@ class FaceDetector:
                     self.texture_pass_count = self.REQUIRED_PASS_FRAMES # 封頂
                     self.is_locked = True
             
-            # 4. 計算 UI 顯示分數 (每幀 20%)
-            # 就算沒鎖定，也要回傳 0%, 20%, 40%, 60%, 80% 的進度感
+            # 4. 計算 UI 顯示分數
             display_score = self.texture_pass_count / self.REQUIRED_PASS_FRAMES
 
             return "SUCCESS", {
