@@ -26,7 +26,7 @@ class FaceRecognizer:
         
         # 3. 讀取門檻值
         self.rec_threshold = self.config.get('thresholds', {}).get('recognition_confidence', 0.5)
-        self.evo_threshold = self.config.get('thresholds', {}).get('evolution_confidence', 0.92)
+        self.evo_threshold = self.config.get('thresholds', {}).get('evolution_confidence', 0.6)
 
         # 4. 讀取辨識權重與距離門檻
         self.base_weight = self.config.get('recognition', {}).get('base_weight', 0.4)
@@ -159,4 +159,5 @@ if __name__ == "__main__":
     # 5. 測試特徵提取功能
     feat = recognizer.extract_feature(test_img)
     if feat is not None:
+
         print(f"\n✅ 特徵提取正常，維度: {feat.shape}")
