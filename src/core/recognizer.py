@@ -35,16 +35,26 @@ class FaceRecognizer:
 
     def extract_feature(self, aligned_face):
         """
-        從對齊後的 112x112 影像提取 512 維特徵。
-        優化點：由於 aligned_face 已經是 112x112，
-        可以考慮在 App 準備時固定偵測大小以加速。
+        從已對齊的 112x112 影像中提取特徵向量。
         """
-        faces = self.app.get(aligned_face)
-        if not faces:
-            # 如果 112x112 的圖還抓不到臉，嘗試直接回傳 None
+        # 1. 基本防呆
+        if aligned_face is None: 
             return None
-        # 確保回傳的是 normed_embedding
-        return faces[0].normed_embedding
+            
+        # 2. 繞過 FaceAnalysis 的封裝，直接取得內部的 ArcFace 辨識模型
+        # 原因：app.get() 會強制重做一次人臉偵測，對於已裁切的 112x112 圖片極易失敗。
+        rec_model = self.app.models['recognition'] 
+        
+        # 3. 直接進行特徵提取 (Inference Only)
+        # 輸入必須是 (112, 112, 3) 的 BGR 圖片
+        feat = rec_model.get_feat(aligned_face)
+        
+        # 4. 確保回傳格式為一維陣列 (512,)
+        # 有些版本會回傳 (1, 512)，使用 flatten() 統一攤平最安全
+        if feat is not None:
+            return feat.flatten()
+            
+        return None
 
     def compute_similarity(self, feat1, feat2):
         """計算餘弦相似度"""

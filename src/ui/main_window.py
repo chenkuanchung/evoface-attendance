@@ -6,7 +6,7 @@ import yaml
 from datetime import datetime
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QLabel, 
                              QVBoxLayout, QHBoxLayout, QListWidget, QFrame)
-from PySide6.QtCore import QThread, Signal, Slot, Qt
+from PySide6.QtCore import QThread, Signal, Slot, Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap, QFont
 
 # 匯入專案核心模組
@@ -189,7 +189,6 @@ class MainWindow(QMainWindow):
         event.accept()
 
 if __name__ == "__main__":
-    from PySide6.QtCore import QTimer
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
