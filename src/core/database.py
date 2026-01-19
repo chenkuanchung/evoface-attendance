@@ -165,7 +165,7 @@ class AttendanceDB:
             cursor.execute('''
                 INSERT INTO logs (employee_id, timestamp, confidence, base_score, dynamic_score, photo_path)
                 VALUES (?, ?, ?, ?, ?, ?)
-            ''', (emp_id, now, confidence, base_s, dyn_s, photo_path))
+            ''', (emp_id, now, float(confidence), base_s, dyn_s, photo_path))
             conn.commit()
             return True, "打卡成功"
 

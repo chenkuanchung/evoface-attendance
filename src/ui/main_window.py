@@ -120,23 +120,42 @@ class MainWindow(QMainWindow):
             color = (0, 255, 0) if is_live else (0, 165, 255)
             cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
             
-            if not is_live:
-                self.status_label.setText(f"辨識中... {int(score*100)}%")
-                self.status_label.setStyleSheet("color: #FFA500;")
-            else:
-                self.status_label.setText("活體檢測通過，正在比對身分...")
-                self.status_label.setStyleSheet("color: #008000;")
-                
-                # 觸發辨識邏輯
-                if not self.is_processing and res['face_img'] is not None:
-                    self.perform_recognition(res['face_img'])
+    def update_image(self, frame, data):
+        """處理每幀影像更新與辨識觸發"""
+        status = data['status']
+        res = data['res']
+        h, w, _ = frame.shape
+
+        if status == "SUCCESS":
+            bbox = res['bbox']
+            is_live = res['is_live']
+            score = res['texture_score']
+
+            # 繪製 UI 框：橘色代表掃描中，綠色代表活體通過
+            color = (0, 255, 0) if is_live else (0, 165, 255)
+            cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
+            
+            # --- 如果正在處理結果，就不要更新文字，讓「打卡成功」留著 ---
+            if not self.is_processing:
+                if not is_live:
+                    self.status_label.setText(f"辨識中... {int(score*100)}%")
+                    self.status_label.setStyleSheet("color: #FFA500;")
+                else:
+                    self.status_label.setText("活體檢測通過，正在比對身分...")
+                    self.status_label.setStyleSheet("color: #008000;")
+                    
+                    # 觸發辨識邏輯
+                    if res['face_img'] is not None:
+                        self.perform_recognition(res['face_img'])
 
         elif status == "MULTIPLE_FACES":
-            self.status_label.setText("警示：偵測到多人，請單人打卡") #
-            self.status_label.setStyleSheet("color: red;")
+            if not self.is_processing:
+                self.status_label.setText("警示：偵測到多人，請單人打卡")
+                self.status_label.setStyleSheet("color: red;")
         else:
-            self.status_label.setText("等待人臉入鏡...")
-            self.status_label.setStyleSheet("color: #555;")
+            if not self.is_processing:
+                self.status_label.setText("等待人臉入鏡...")
+                self.status_label.setStyleSheet("color: #555;")
 
         # 轉換影像格式顯示在 QLabel
         rgb_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -149,24 +168,20 @@ class MainWindow(QMainWindow):
         
         # 1. 執行 1:N 比對
         emp_id, score, evolve, details, live_feat = self.recognizer.identify(face_img)
-
         print(f"🔍 [Debug] 比對結果: ID={emp_id}, 分數={score:.4f}, 詳細={details}")
         
         if emp_id:
-            # 2. 儲存打卡紀錄與處理特徵演進
-            # 這裡簡單產生一個照片路徑
             photo_name = f"data/logs/{emp_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-            os.makedirs("data/logs", exist_ok=True)
-            cv2.imwrite(photo_name, face_img)
-            
             success, message = self.recognizer.process_attendance(
                 emp_id, score, evolve, live_feat, photo_name, details
             )
-            
             if success:
                 self.status_label.setText(f"打卡成功：{emp_id}")
                 self.refresh_logs()
                 speak_success()# 打卡成功語音
+                # 2. 儲存打卡紀錄與處理特徵演進
+                os.makedirs("data/logs", exist_ok=True)
+                cv2.imwrite(photo_name, face_img)
             else:
                 # 可能是觸發了 5 分鐘去抖動機制
                 self.status_label.setText(message)
@@ -177,7 +192,7 @@ class MainWindow(QMainWindow):
             print(f"❌ {msg}")
         
         # 3. 重置偵測器狀態，準備下一次辨識
-        QTimer.singleShot(2000, self.reset_recognition) # 2秒後恢復辨識功能
+        QTimer.singleShot(5000, self.reset_recognition) # 5秒後恢復辨識功能
 
     def reset_recognition(self):
         """重置狀態供下一位員工打卡"""

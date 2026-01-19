@@ -19,7 +19,7 @@ database:
 
 # 考勤邏輯設定
 attendance:
-  debounce_minutes: 5
+  debounce_minutes: 1
 
 # 演算法門檻值設定
 thresholds:
@@ -35,8 +35,8 @@ thresholds:
   tracking_confidence: 0.6
 
   # 4. 人臉辨識相關門檻
-  recognition_confidence: 0.3
-  evolution_confidence: 0.5
+  recognition_confidence: 0.35
+  evolution_confidence: 0.6
 
 # 人臉辨識核心參數設定
 recognition:

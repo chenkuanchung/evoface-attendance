@@ -103,9 +103,9 @@ class FaceRecognizer:
         # 檢查是否達到辨識門檻
         if max_fused_score >= self.rec_threshold:
             should_evolve = max_fused_score >= self.evo_threshold
-            return best_match_id, max_fused_score, should_evolve, final_details, live_feat
+            return best_match_id, float(max_fused_score), should_evolve, final_details, live_feat
         
-        return None, max_fused_score, False, final_details, live_feat
+        return None, float(max_fused_score), False, final_details, live_feat
 
     def process_attendance(self, emp_id, score, should_evolve, live_feat, photo_path, details):
         """
