@@ -13,6 +13,7 @@ from PySide6.QtGui import QImage, QPixmap, QFont
 from src.core.detector import FaceDetector
 from src.core.recognizer import FaceRecognizer
 from src.core.database import AttendanceDB
+from src.utils.voice import speak_success
 
 class VideoThread(QThread):
     """
@@ -163,6 +164,7 @@ class MainWindow(QMainWindow):
             if success:
                 self.status_label.setText(f"打卡成功：{emp_id}")
                 self.refresh_logs()
+                speak_success()# 打卡成功語音
             else:
                 # 可能是觸發了 5 分鐘去抖動機制
                 self.status_label.setText(message)
