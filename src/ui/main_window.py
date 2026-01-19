@@ -149,6 +149,8 @@ class MainWindow(QMainWindow):
         
         # 1. 執行 1:N 比對
         emp_id, score, evolve, details, live_feat = self.recognizer.identify(face_img)
+
+        print(f"🔍 [Debug] 比對結果: ID={emp_id}, 分數={score:.4f}, 詳細={details}")
         
         if emp_id:
             # 2. 儲存打卡紀錄與處理特徵演進
@@ -169,7 +171,10 @@ class MainWindow(QMainWindow):
                 # 可能是觸發了 5 分鐘去抖動機制
                 self.status_label.setText(message)
         else:
-            self.status_label.setText("辨識失敗：查無此員工")
+            # 如果失敗，顯示分數讓你知道差多少
+            msg = f"辨識失敗 (分數: {score:.2f})"
+            self.status_label.setText(msg)
+            print(f"❌ {msg}")
         
         # 3. 重置偵測器狀態，準備下一次辨識
         QTimer.singleShot(2000, self.reset_recognition) # 2秒後恢復辨識功能

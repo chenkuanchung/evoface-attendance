@@ -87,7 +87,8 @@ class FaceDetector:
                 ]
                 aligned_face = self.img_tool.align_face(frame, landmarks_5pt, is_masked=False)
                 #cv2.imshow("aligned_face (Debug)", aligned_face)
-                recognition_face = self.img_tool.enhance_face(aligned_face)
+                # recognition_face = self.img_tool.enhance_face(aligned_face) # 有影像增強
+                recognition_face = aligned_face # 無影像增強
                 #cv2.imshow("recognition_face (Debug)", recognition_face)
 
             if not self.is_locked:

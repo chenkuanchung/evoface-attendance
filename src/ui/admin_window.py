@@ -98,9 +98,13 @@ class AdminWindow(QMainWindow):
             return
 
         # 讀取並偵測
-        img = cv2.imread(file_path)
+        # img = cv2.imread(file_path) # 原本寫法 (不支援中文路徑)
+        try:
+            img = cv2.imdecode(np.fromfile(file_path, dtype=np.uint8), cv2.IMREAD_COLOR)
+        except Exception:
+            img = None
         if img is None:
-            QMessageBox.warning(self, "錯誤", "無法讀取照片檔案！")
+            QMessageBox.warning(self, "錯誤", "無法讀取照片檔案！\n(請確認檔案未損壞，且為標準圖片格式)")
             return
 
         # 使用 FaceAnalysis (app.get) 進行全圖偵測與對齊
@@ -167,7 +171,8 @@ class AdminWindow(QMainWindow):
                 save_path = os.path.join(save_dir, filename)
                 
                 # 寫入硬碟
-                cv2.imwrite(save_path, self.current_face_img)
+                # cv2.imwrite(save_path, self.current_face_img) # 原本寫法 (不支援中文檔名)
+                cv2.imencode('.jpg', self.current_face_img)[1].tofile(save_path)
                 print(f"照片已儲存至: {save_path}")
 
             QMessageBox.information(self, "成功", f"員工 {name} ({emp_id}) 註冊成功！")

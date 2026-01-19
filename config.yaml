@@ -35,8 +35,8 @@ thresholds:
   tracking_confidence: 0.6
 
   # 4. 人臉辨識相關門檻
-  recognition_confidence: 0.7
-  evolution_confidence: 0.92
+  recognition_confidence: 0.3
+  evolution_confidence: 0.5
 
 # 人臉辨識核心參數設定
 recognition:
