@@ -93,7 +93,14 @@ class AttendanceCalculator:
             # 這裡採用簡單比對：若依靠 default_shift，則直接比對時間差
             # 若無 default_shift，因為已經落入 range，通常不會遲到太誇張
             
-            pass # 暫時跳過極端邊界檢查，維持基本運作
+            if shift_conf and first_in:
+                std_in = datetime.strptime(shift_conf['start_time'], "%H:%M").time()
+                # 將時間轉為分鐘數比較
+                chk_min = first_in.hour * 60 + first_in.minute
+                std_min = std_in.hour * 60 + std_in.minute
+                # 給予 30 分鐘緩衝
+                if chk_min > (std_min + 30):
+                    status_list.append("遲到")
 
         # 3. 工時計算 (核心)
         work_hours = 0.0
@@ -101,7 +108,7 @@ class AttendanceCalculator:
             duration = (last_out - first_in).total_seconds() / 3600.0
             
             # 規則：滿 4 小時扣 1 小時休息
-            if duration >= 4.0:
+            if duration >= 5.0:
                 work_hours = duration - 1.0
             else:
                 work_hours = duration

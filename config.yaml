@@ -6,7 +6,7 @@ system:
   app_name: "EvoFace - AI 人臉辨識考勤系統"
   # 推論硬體模式: "auto" (自動偵測), "gpu" (強制 GPU), "cpu" (強制 CPU)
   # 此設定將影響 liveness_engine.py 與未來的 recognizer.py
-  device_mode: "auto"
+  device_mode: "auto" # "gpu", "cpu", "auto"
 
 # 資料庫與模型路徑設定
 database:
@@ -62,9 +62,12 @@ thresholds:
   # 4. 人臉辨識相關門檻
   recognition_confidence: 0.5
   evolution_confidence: 0.5 # 有了 dynamic feature 之後會調升成0.85
+  warning_base_score: 0.3       # Base 分數低於此值顯示黃字警告
+  evolution_min_base: 0.5       # 特徵演進條件：Base 最低要求
+  evolution_min_dynamic: 0.85   # 特徵演進條件：Dynamic 強度要求
 
 # 人臉辨識核心參數設定
 recognition:
-  distance_threshold: 0.2
+  min_face_ratio: 0.2  # 人臉佔畫面的最小比例 (太遠不偵測)
   base_weight: 0.4
   dynamic_weight: 0.6

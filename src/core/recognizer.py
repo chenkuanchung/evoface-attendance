@@ -27,12 +27,14 @@ class FaceRecognizer:
         
         # 3. 讀取門檻值
         self.rec_threshold = self.config.get('thresholds', {}).get('recognition_confidence', 0.5)
-        self.evo_threshold = self.config.get('thresholds', {}).get('evolution_confidence', 0.6)
+        self.evo_threshold = self.config.get('thresholds', {}).get('evolution_confidence', 0.5)
+        self.warn_base_th = self.config.get('thresholds', {}).get('warning_base_score', 0.3)
+        self.evo_min_base = self.config.get('thresholds', {}).get('evolution_min_base', 0.5)
+        self.evo_min_dyn = self.config.get('thresholds', {}).get('evolution_min_dynamic', 0.85)
 
         # 4. 讀取辨識權重與距離門檻
         self.base_weight = self.config.get('recognition', {}).get('base_weight', 0.4)
         self.dynamic_weight = self.config.get('recognition', {}).get('dynamic_weight', 0.6)
-        #self.dist_threshold = self.config.get('recognition', {}).get('distance_threshold', 0.4)
 
     def extract_feature(self, aligned_face):
         """
@@ -107,7 +109,7 @@ class FaceRecognizer:
                     # 條件：如果 Dynamic 已經存在...
                     # 1. Base 分數尚可 (> 0.5) -> 代表這真的是本人，可以用來修復/更新 Dynamic
                     # 2. Dynamic 分數極高 (> 0.85) -> 代表狀態極佳，保持更新
-                    if base_score > 0.5 or dyn_score > 0.85:
+                    if base_score > self.evo_min_base or dyn_score > self.evo_min_dyn:
                         should_evolve = True
                     else:
                         should_evolve = False
@@ -118,7 +120,7 @@ class FaceRecognizer:
 
                 # === 警告判斷 ===
                 # 如果 Base 低於 0.3，標記警告 (建議通知管理員)
-                if base_score < 0.3:
+                if base_score < self.warn_base_th:
                     low_base_warning = True
                 else:
                     low_base_warning = False

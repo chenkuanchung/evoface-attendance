@@ -35,8 +35,8 @@ class FaceDetector:
         
         # 4. 讀取門檻值與狀態控制
         self.texture_threshold = self.config.get('thresholds', {}).get('texture_liveness', 0.95)
-        # 讀取使用者指定的佔比門檻 (預設 0.4)
-        self.min_face_ratio = self.config.get('recognition', {}).get('distance_threshold', 0.4)
+        # 讀取使用者指定的佔比門檻 
+        self.min_face_ratio = self.config.get('recognition', {}).get('min_face_ratio', 0.2)
         
         self.is_locked = False
         self.texture_pass_count = 0 
