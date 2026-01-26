@@ -70,7 +70,7 @@ class AttendanceCalculator:
             status_list.append("缺下班卡")
         
         # 2. 異常檢查：遲到 (如果有班別設定)
-        if shift_conf and first_in: # 加上 first_in 檢查防呆
+        if shift_conf and first_in:
             # 定義 helper
             def to_mins(t): return t.hour * 60 + t.minute
             
@@ -88,7 +88,7 @@ class AttendanceCalculator:
         if last_out:
             duration = (last_out - first_in).total_seconds() / 3600.0
             
-            # 規則：滿 4 小時扣 1 小時休息
+            # 規則：滿 5 小時扣 1 小時休息 (保障半天班不被誤扣)
             if duration >= 5.0:
                 work_hours = duration - 1.0
             else:
