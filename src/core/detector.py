@@ -35,6 +35,9 @@ class FaceDetector:
         
         # 4. 讀取門檻值與狀態控制
         self.texture_threshold = self.config.get('thresholds', {}).get('texture_liveness', 0.95)
+        # 讀取使用者指定的佔比門檻 (預設 0.4)
+        self.min_face_ratio = self.config.get('recognition', {}).get('distance_threshold', 0.4)
+        
         self.is_locked = False
         self.texture_pass_count = 0 
         self.REQUIRED_PASS_FRAMES = 10
@@ -61,43 +64,43 @@ class FaceDetector:
             x1, y1, x2, y2 = int(min(x_coords)), int(min(y_coords)), int(max(x_coords)), int(max(y_coords))
             actual_bbox = [x1, y1, x2, y2]
 
-            # === 新增：BBox Padding 邏輯 ===
-            padding_ratio = 0.6  # 向外擴張 xx%
+            # === 人臉佔比檢查邏輯 ===
+            face_area = (x2 - x1) * (y2 - y1)
+            frame_area = w * h
+            ratio = face_area / frame_area
+            
+            # 如果佔比小於設定值，則回傳過小狀態
+            if ratio < self.min_face_ratio:
+                self.reset_liveness()
+                return "FACE_TOO_SMALL", {"bbox": actual_bbox}
+            # ==============================
+
+            # === BBox Padding 邏輯 ===
+            padding_ratio = 0.6
             face_w = x2 - x1
             face_h = y2 - y1
             
-            # 計算 Padding 像素
             pad_w = int(face_w * padding_ratio)
             pad_h = int(face_h * padding_ratio)
             
-            # 取得擴展後的座標，並確保不超出 frame 邊界
             px1 = max(0, x1 - pad_w)
             py1 = max(0, y1 - pad_h)
             px2 = min(w, x2 + pad_w)
             py2 = min(h, y2 + pad_h)
-            # ===========================
             
             recognition_face = None
             if self.is_locked:
-                # 辨識用的對齊邏輯維持不變
                 landmarks_5pt = [
                     [points[468].x * w, points[468].y * h], [points[473].x * w, points[473].y * h],
                     [points[4].x * w, points[4].y * h], [points[61].x * w, points[61].y * h],
                     [points[291].x * w, points[291].y * h]
                 ]
                 aligned_face = self.img_tool.align_face(frame, landmarks_5pt, is_masked=False)
-                #cv2.imshow("aligned_face (Debug)", aligned_face)
-                # recognition_face = self.img_tool.enhance_face(aligned_face) # 有影像增強
-                recognition_face = aligned_face # 無影像增強
-                #cv2.imshow("recognition_face (Debug)", recognition_face)
+                recognition_face = aligned_face 
 
             if not self.is_locked:
-                # 使用帶有 Padding 的區域進行活體偵測
                 face_roi = frame[py1:py2, px1:px2]
-                #enhanced_face_roi = self.img_tool.enhance_face(face_roi) # 增強好像沒比較好
-
                 if face_roi.size > 0:
-                    # cv2.imshow("Liveness ROI (Debug)", face_roi) # 活體偵測模型看到的影像
                     raw_score = self.silent_face_analyzer.predict(face_roi)
                     
                     if raw_score >= self.texture_threshold:
@@ -109,26 +112,20 @@ class FaceDetector:
                         self.texture_pass_count = self.REQUIRED_PASS_FRAMES
                         self.is_locked = True
             
-            # 4. 計算 UI 顯示分數
             display_score = self.texture_pass_count / self.REQUIRED_PASS_FRAMES
 
             return "SUCCESS", {
                 "bbox": actual_bbox,
                 "is_live": self.is_locked,
-                "texture_score": display_score, # 回傳 0.0 ~ 1.0 的百分比進度
+                "texture_score": display_score,
                 "face_img": recognition_face if self.is_locked else None 
             }
 
     def reset_liveness(self):
-        """
-        強制重置活體狀態。
-        實務上，請在 Recognizer 成功處理完一次打卡後呼叫此方法。
-        """
         self.is_locked = False
         self.texture_pass_count = 0
 
     def __del__(self):
-        """釋放資源"""
         if hasattr(self, 'landmarker'):
             self.landmarker.close()
 

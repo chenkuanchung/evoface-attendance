@@ -1,7 +1,8 @@
 import numpy as np
 import cv2
 import yaml
-import insightface
+#import insightface
+from datetime import datetime
 from insightface.app import FaceAnalysis
 from src.core.database import AttendanceDB
 from src.utils.image_tool import ImagePreprocessor
@@ -31,7 +32,7 @@ class FaceRecognizer:
         # 4. 讀取辨識權重與距離門檻
         self.base_weight = self.config.get('recognition', {}).get('base_weight', 0.4)
         self.dynamic_weight = self.config.get('recognition', {}).get('dynamic_weight', 0.6)
-        self.dist_threshold = self.config.get('recognition', {}).get('distance_threshold', 0.4)
+        #self.dist_threshold = self.config.get('recognition', {}).get('distance_threshold', 0.4)
 
     def extract_feature(self, aligned_face):
         """
@@ -62,7 +63,7 @@ class FaceRecognizer:
 
     def identify(self, processed_face):
         """
-        執行 1:N 加權比對邏輯 (使用 config.yaml 設定之權重)
+        執行 1:N 加權比對邏輯 (含使用者自定義演進策略)
         """
         live_feat = self.extract_feature(processed_face)
         if live_feat is None:
@@ -73,15 +74,17 @@ class FaceRecognizer:
         max_fused_score = -1.0
         final_details = {}
         
+        should_evolve = False
+        # 新增一個 flag 判斷是否需要警告 (Base < 0.4)
+        low_base_warning = False
+
         for emp_id, data in all_employees.items():
             base_feat = data['base']
             dynamic_feat = data['dynamic']
             
-            # --- 動態權重融合邏輯 ---
+            # --- 動態權重融合 ---
             if dynamic_feat is not None:
-                # 使用 config 中的權重進行融合 
                 fused_feat = (base_feat * self.base_weight) + (dynamic_feat * self.dynamic_weight)
-                # 融合後必須重新歸一化以維持單位向量 
                 fused_feat = fused_feat / np.linalg.norm(fused_feat)
             else:
                 fused_feat = base_feat
@@ -91,18 +94,44 @@ class FaceRecognizer:
             base_score = self.compute_similarity(live_feat, base_feat)
             dyn_score = self.compute_similarity(live_feat, dynamic_feat) if dynamic_feat is not None else 0.0
 
+            # 診斷輸出
+            if fused_score > 0.4:
+                print(f"📊 [診斷] ID: {emp_id} | 總分: {fused_score:.2f} | Base: {base_score:.2f} | Dynamic: {dyn_score:.2f}")
+
             if fused_score > max_fused_score:
                 max_fused_score = fused_score
                 best_match_id = emp_id
+                
+                # === 使用者的演進邏輯 ===
+                if dynamic_feat is not None:
+                    # 條件：如果 Dynamic 已經存在...
+                    # 1. Base 分數尚可 (> 0.5) -> 代表這真的是本人，可以用來修復/更新 Dynamic
+                    # 2. Dynamic 分數極高 (> 0.85) -> 代表狀態極佳，保持更新
+                    if base_score > 0.5 or dyn_score > 0.85:
+                        should_evolve = True
+                    else:
+                        should_evolve = False
+                else:
+                    # 冷啟動：還沒有 Dynamic 時，門檻設低一點以便建立第一個模型
+                    if fused_score > self.evo_threshold: # 預設值
+                        should_evolve = True
+
+                # === 警告判斷 ===
+                # 如果 Base 低於 0.3，標記警告 (建議通知管理員)
+                if base_score < 0.3:
+                    low_base_warning = True
+                else:
+                    low_base_warning = False
+
                 final_details = {
                     "base_score": float(base_score),
                     "dynamic_score": float(dyn_score),
-                    "fused_score": float(fused_score)
+                    "fused_score": float(fused_score),
+                    "warning": low_base_warning # 傳遞警告狀態
                 }
 
-        # 檢查是否達到辨識門檻
+        # 檢查是否達到基本辨識門檻
         if max_fused_score >= self.rec_threshold:
-            should_evolve = max_fused_score >= self.evo_threshold
             return best_match_id, float(max_fused_score), should_evolve, final_details, live_feat
         
         return None, float(max_fused_score), False, final_details, live_feat
@@ -123,6 +152,8 @@ class FaceRecognizer:
             if live_feat is not None:
                 self.db.update_dynamic_feature(emp_id, live_feat) 
                 message += " (特徵已進化)"
+                print(f"\n\033[92m[EVO] 🧬 員工 {emp_id} 特徵模型已自動演進更新! (Score: {score:.4f})\033[0m")
+                print(f"      ↳ 時間: {datetime.now().strftime('%H:%M:%S')} | Base: {details.get('base_score',0):.2f}")
         
         return success, message
     
@@ -159,5 +190,4 @@ if __name__ == "__main__":
     # 5. 測試特徵提取功能
     feat = recognizer.extract_feature(test_img)
     if feat is not None:
-
         print(f"\n✅ 特徵提取正常，維度: {feat.shape}")

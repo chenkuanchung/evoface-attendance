@@ -20,6 +20,31 @@ database:
 # 考勤邏輯設定
 attendance:
   debounce_minutes: 1
+  day_cutoff: "04:00" # 日切點：凌晨 4 點前打卡算「昨天」
+
+# 三班制定義 (Format: HH:MM)
+# 邏輯：一班 9 小時 (含休 1 小時)。
+shifts:
+  morning:
+    name: "早班"
+    start_time: "08:00"  # 標準上班
+    end_time: "17:00"    # 標準下班
+    range_start: "05:00" # 自動判斷區間起
+    range_end: "11:00"   # 自動判斷區間止
+  
+  evening:
+    name: "晚班"
+    start_time: "16:00"
+    end_time: "01:00"    # 跨日
+    range_start: "13:00"
+    range_end: "19:00"
+
+  night:
+    name: "大夜班"
+    start_time: "00:00"
+    end_time: "09:00"
+    range_start: "21:00"
+    range_end: "03:00"
 
 # 演算法門檻值設定
 thresholds:
@@ -36,11 +61,10 @@ thresholds:
 
   # 4. 人臉辨識相關門檻
   recognition_confidence: 0.5
-  evolution_confidence: 0.6
+  evolution_confidence: 0.5 # 有了 dynamic feature 之後會調升成0.85
 
 # 人臉辨識核心參數設定
 recognition:
-  distance_threshold: 0.4
+  distance_threshold: 0.2
   base_weight: 0.4
-
   dynamic_weight: 0.6
