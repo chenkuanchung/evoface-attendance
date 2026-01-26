@@ -42,7 +42,7 @@ EvoFace 是一套整合 **即時人臉辨識**、**活體防偽偵測** 與 **�
 
 ```bash
 # 1. 下載專案
-git clone [https://github.com/your-username/evoface-attendance.git](https://github.com/your-username/evoface-attendance.git)
+git clone https://github.com/chenkuanchung/evoface-attendance.git
 cd evoface-attendance
 
 # 2. 建立虛擬環境 (建議)
@@ -165,5 +165,15 @@ evoface-attendance/
 └── LICENSE                    # 授權條款
 ```
 
+---
 
+## 📝 授權與聲明
+
+本專案僅供學術研究與內部使用。
+
+- Face Detection model based on Google MediaPipe.
+
+- Anti-Spoofing model based on MiniFASNet (Silent-Face).
+
+- Recognition model based on InsightFace.
 
