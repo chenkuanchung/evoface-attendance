@@ -1,7 +1,11 @@
 # EvoFace - 企業級 AI 人臉辨識考勤系統
+### Enterprise AI Face Recognition Attendance System
 
 EvoFace 是一套整合 **即時人臉辨識**、**活體防偽偵測** 與 **自動化考勤計算** 的全方位解決方案。
 系統採用 InsightFace (ArcFace) 作為辨識核心，並結合 Silent-Face (MiniFASNet) 進行防照片/影片攻擊，適合中小企業進行打卡管理。
+
+EvoFace is a comprehensive solution integrating **Real-time Face Recognition**, **Liveness Detection**, and **Automated Attendance Calculation**.
+Powered by **InsightFace (ArcFace)** for recognition and **Silent-Face (MiniFASNet)** for anti-spoofing, it effectively defends against photo/video attacks, making it an ideal attendance management system for SMBs.
 
 ## 🌟 核心功能 (Key Features)
 
