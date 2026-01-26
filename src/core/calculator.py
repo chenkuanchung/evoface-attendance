@@ -70,37 +70,18 @@ class AttendanceCalculator:
             status_list.append("缺下班卡")
         
         # 2. 異常檢查：遲到 (如果有班別設定)
-        if shift_conf:
-            std_in_str = shift_conf['start_time']
-            std_in_t = datetime.strptime(std_in_str, "%H:%M").time()
-            
-            # 簡化邏輯：如果打卡時間 "HH:MM" 晚於標準時間 + 10分鐘 Buffer
-            # 注意：這裡不處理跨日日期的比對，僅比對時間字串，適用於大部分場景
-            buffer_min = 10
-            
-            # 將時間轉為當日分鐘數進行比較，避免跨日問題複雜化
+        if shift_conf and first_in: # 加上 first_in 檢查防呆
+            # 定義 helper
             def to_mins(t): return t.hour * 60 + t.minute
             
+            # 計算時間
+            std_in_t = datetime.strptime(shift_conf['start_time'], "%H:%M").time()
             first_mins = to_mins(first_in)
             std_mins = to_mins(std_in_t)
             
-            # 特殊處理：如果標準上班是大夜 (例如 00:00)，而打卡是 23:50 (前一天)
-            # 這裡簡化：只針對 "晚於" 進行遲到判斷
-            
-            # 如果是跨日班 (例如 21:00 上班)，且打卡是 02:00 (凌晨)，這絕對遲到
-            # 但如果是 20:55 打卡，則正常
-            
-            # 這裡採用簡單比對：若依靠 default_shift，則直接比對時間差
-            # 若無 default_shift，因為已經落入 range，通常不會遲到太誇張
-            
-            if shift_conf and first_in:
-                std_in = datetime.strptime(shift_conf['start_time'], "%H:%M").time()
-                # 將時間轉為分鐘數比較
-                chk_min = first_in.hour * 60 + first_in.minute
-                std_min = std_in.hour * 60 + std_in.minute
-                # 給予 30 分鐘緩衝
-                if chk_min > (std_min + 30):
-                    status_list.append("遲到")
+            # 判斷遲到 (緩衝 30 分鐘)
+            if first_mins > (std_mins + 30):
+                status_list.append("遲到")
 
         # 3. 工時計算 (核心)
         work_hours = 0.0
