@@ -10,7 +10,7 @@ Powered by **InsightFace (ArcFace)** for recognition and **Silent-Face (MiniFASN
 ## 🌟 核心功能 (Key Features)
 
 ### 1. 高精度人臉辨識與活體防禦
-- **雙重引擎**：使用 MediaPipe 進行快速人臉定位，搭配 InsightFace (Buffalo_L) 提取特徵。
+- **雙重引擎**：使用 MediaPipe 進行快速人臉定位，搭配 InsightFace (Buffalo_L) 提取高維特徵向量 (Vector Embeddings)，透過餘弦相似度運算實現毫秒級精準比對。
 - **強健的遮擋適應性 (Occlusion Robustness)**：
   - **口罩/眼鏡支援**：經參數調校，系統可在佩戴眼鏡或口罩的情況下完成辨識，但註冊後的首次辨識在**不配戴口罩**的情況下較容易成功。
   - **智慧演進保護**：當偵測到面部有遮擋（如口罩）導致信心度下降，但仍高於最低辨識門檻時，系統會**允許打卡但暫停特徵更新 (Feature Update)**，防止遮擋的特徵汙染資料庫中的演進特徵。
