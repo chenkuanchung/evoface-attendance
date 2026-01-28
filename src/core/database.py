@@ -25,7 +25,8 @@ class AttendanceDB:
         self._migrate_db() # 自動檢查並升級欄位
 
     def _get_connection(self):
-        return sqlite3.connect(self.db_path)
+        # timeout=60 表示：如果資料庫被鎖住，我願意等 60 秒，這期間若鎖解開了就寫入。
+        return sqlite3.connect(self.db_path, timeout=60.0)
 
     def _init_db(self):
         """初始化基礎表結構"""
@@ -301,4 +302,5 @@ class AttendanceDB:
             ''', (limit,))
             for row in cursor.fetchall():
                 logs.append({'name': row[0], 'time': row[1].split('.')[0], 'score': round(row[2], 2)})
+
         return logs
