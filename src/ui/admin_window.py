@@ -61,6 +61,29 @@ class AdminWindow(QMainWindow):
         self.init_report_tab()
         self.tabs.addTab(self.tab_report, "📊 考勤報表與匯出")
 
+        # 建立一個水平佈局 (HBoxLayout) 來放按鈕，避免按鈕被拉得太長
+        bottom_layout = QHBoxLayout()
+        bottom_layout.addStretch() # 彈簧，把按鈕頂到右邊 (可選)
+        
+        self.btn_backup = QPushButton("💾 立即備份資料庫")
+        self.btn_backup.setFixedWidth(200) # (可選) 設定固定寬度比較美觀
+        self.btn_backup.setStyleSheet("""
+            QPushButton {
+                background-color: #D6EAF8; 
+                color: #21618C; 
+                font-weight: bold; 
+                padding: 10px;
+                border-radius: 5px;
+            }
+            QPushButton:hover {
+                background-color: #AED6F1;
+            }
+        """)
+        self.btn_backup.clicked.connect(self.perform_backup)
+        
+        bottom_layout.addWidget(self.btn_backup) # 加入水平佈局
+        main_layout.addLayout(bottom_layout)     # 將按鈕佈局加入主畫面
+
     # ==========================================
     # Tab 1: 員工管理
     # ==========================================
@@ -418,6 +441,36 @@ class AdminWindow(QMainWindow):
                 self.db.approve_request(req_id, decision)
             QMessageBox.information(self, "完成", "處理完畢")
             self.refresh_approval_list()
+
+    def perform_backup(self):
+        import sqlite3
+        
+        db_path = "data/attendance.db"
+        backup_dir = "backup"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = os.path.join(backup_dir, f"attendance_backup_{timestamp}.db")
+        
+        if not os.path.exists(backup_dir):
+            os.makedirs(backup_dir)
+
+        try:
+            # 連接到現有資料庫
+            src_conn = sqlite3.connect(db_path)
+            # 連接到備份目標檔案 (會自動建立)
+            dst_conn = sqlite3.connect(backup_path)
+            
+            with dst_conn:
+                # 使用 SQLite 的 Online Backup API
+                # 這會自動處理鎖定問題，確保備份的一致性
+                src_conn.backup(dst_conn)
+            
+            dst_conn.close()
+            src_conn.close()
+            
+            QMessageBox.information(self, "成功", f"安全備份完成！\n{backup_path}")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "失敗", str(e))
 
     def approve_request(self): self.process_request('approved')
     def reject_request(self): self.process_request('rejected')

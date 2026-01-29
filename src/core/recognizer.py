@@ -76,9 +76,10 @@ class FaceRecognizer:
         max_fused_score = -1.0
         final_details = {}
         
+        
+        best_dynamic_feat_vector = None # 用來暫存最佳匹配者的動態特徵
         should_evolve = False
-        # 新增一個 flag 判斷是否需要警告 (Base < 0.4)
-        low_base_warning = False
+        low_base_warning = False # 判斷是否需要警告 (Base < 0.4)
 
         for emp_id, data in all_employees.items():
             base_feat = data['base']
@@ -103,6 +104,7 @@ class FaceRecognizer:
             if fused_score > max_fused_score:
                 max_fused_score = fused_score
                 best_match_id = emp_id
+                best_dynamic_feat_vector = dynamic_feat
                 
                 # === 使用者的演進邏輯 ===
                 if dynamic_feat is not None:
@@ -129,7 +131,8 @@ class FaceRecognizer:
                     "base_score": float(base_score),
                     "dynamic_score": float(dyn_score),
                     "fused_score": float(fused_score),
-                    "warning": low_base_warning # 傳遞警告狀態
+                    "warning": low_base_warning, # 傳遞警告狀態
+                    "matched_old_dynamic": best_dynamic_feat_vector
                 }
 
         # 檢查是否達到基本辨識門檻
@@ -149,14 +152,31 @@ class FaceRecognizer:
             # 額外安全性檢查：若原始特徵比對分數過低 (可能戴口罩)，則不更新動態特徵
             base_s = details.get('base_score', 0.0)
             if base_s < 0.4:
-                return success, message + " (辨識成功，但因遮擋嚴重跳過特徵演進)"
+                return success, message + " (辨識成功，跳過特徵演進: 與原始照差異過大)"
 
-            if live_feat is not None:
-                self.db.update_dynamic_feature(emp_id, live_feat) 
-                message += " (特徵已進化)"
-                print(f"\n\033[92m[EVO] 🧬 員工 {emp_id} 特徵模型已自動演進更新! (Score: {score:.4f})\033[0m")
-                print(f"      ↳ 時間: {datetime.now().strftime('%H:%M:%S')} | Base: {details.get('base_score',0):.2f}")
-        
+            if live_feat is not None:          
+                # 1. 取得舊的 Dynamic Feature
+                old_dynamic = details.get("matched_old_dynamic")
+
+                if old_dynamic is not None:
+                    # 設定學習率 alpha
+                    alpha = 0.1 
+                    
+                    # 公式: New = alpha * Live + (1-alpha) * Old
+                    new_dynamic = (alpha * live_feat) + ((1 - alpha) * old_dynamic)
+                    
+                    # 重新正規化 (L2 Norm)
+                    new_dynamic = new_dynamic / np.linalg.norm(new_dynamic)
+                    
+                    print(f"🌊 [Soft Update] 融合舊特徵 (Alpha={alpha})")
+                else:
+                    # 冷啟動：如果原本沒有 Dynamic，直接使用新的
+                    new_dynamic = live_feat
+
+                # 2. 寫入資料庫
+                self.db.update_dynamic_feature(emp_id, new_dynamic)
+                message += " (特徵已柔和演進)"
+
         return success, message
     
 if __name__ == "__main__":

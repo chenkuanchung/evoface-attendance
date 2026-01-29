@@ -302,5 +302,4 @@ class AttendanceDB:
             ''', (limit,))
             for row in cursor.fetchall():
                 logs.append({'name': row[0], 'time': row[1].split('.')[0], 'score': round(row[2], 2)})
-
         return logs
