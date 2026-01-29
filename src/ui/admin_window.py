@@ -1,6 +1,7 @@
 import sys
 import os
 import cv2
+import sqlite3
 import numpy as np
 import pandas as pd
 from datetime import datetime, date, timedelta
@@ -9,14 +10,49 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QLabel,
                              QLineEdit, QFileDialog, QMessageBox, QGroupBox, 
                              QFormLayout, QTabWidget, QComboBox, QListWidgetItem,
                              QSplitter, QTableWidget, QTableWidgetItem, QHeaderView,
-                             QDateEdit)
-from PySide6.QtCore import Qt, QDate
-from PySide6.QtGui import QImage, QPixmap, QFont, QColor
+                             QDateEdit, QListView, QCheckBox)
+from PySide6.QtCore import Qt, QDate, QSortFilterProxyModel, QThread, Signal
+from PySide6.QtGui import QImage, QPixmap, QFont, QColor, QStandardItemModel, QStandardItem
 
 # 引用核心模組
 from src.core.recognizer import FaceRecognizer
 from src.core.database import AttendanceDB
 from src.core.calculator import AttendanceCalculator # 引入計算核心
+
+class BackupWorker(QThread):
+    """獨立的備份執行緒，避免卡住 UI"""
+    finished_signal = Signal(bool, str) # 回傳 (是否成功, 訊息)
+
+    def __init__(self, db_path, backup_dir="backup"):
+        super().__init__()
+        self.db_path = db_path
+        self.backup_dir = backup_dir
+
+    def run(self):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = os.path.join(self.backup_dir, f"attendance_backup_{timestamp}.db")
+        
+        if not os.path.exists(self.backup_dir):
+            try:
+                os.makedirs(self.backup_dir)
+            except Exception as e:
+                self.finished_signal.emit(False, f"無法建立目錄: {str(e)}")
+                return
+
+        try:
+            # 建立獨立連線進行備份
+            src_conn = sqlite3.connect(self.db_path)
+            dst_conn = sqlite3.connect(backup_path)
+            
+            with dst_conn:
+                src_conn.backup(dst_conn)
+            
+            dst_conn.close()
+            src_conn.close()
+            
+            self.finished_signal.emit(True, backup_path)
+        except Exception as e:
+            self.finished_signal.emit(False, str(e))
 
 class AdminWindow(QMainWindow):
     def __init__(self):
@@ -24,16 +60,26 @@ class AdminWindow(QMainWindow):
         self.setWindowTitle("EvoFace - 考勤管理後台")
         self.resize(1200, 800)
         
-        # 初始化核心
+        # 1. 初始化核心與資料庫
         self.db = AttendanceDB()
         self.recognizer = FaceRecognizer()
-        self.calc = AttendanceCalculator() # 初始化計算機
+        self.calc = AttendanceCalculator()
+        
+        # 2. 先建立 Model 與 Proxy Model (放在 init_ui 之前！)
+        self.emp_model = QStandardItemModel()
+        self.proxy_model = QSortFilterProxyModel()
+        self.proxy_model.setSourceModel(self.emp_model)
+        self.proxy_model.setFilterCaseSensitivity(Qt.CaseInsensitive)
+        self.proxy_model.setFilterKeyColumn(0)
         
         # 暫存變數
         self.current_feature = None
         self.current_face_img = None
         
+        # 3. 最後才初始化 UI
         self.init_ui()
+        
+        # 4. 載入資料
         self.refresh_employee_list()
         self.refresh_approval_list()
 
@@ -90,13 +136,21 @@ class AdminWindow(QMainWindow):
     def init_employee_tab(self):
         layout = QHBoxLayout(self.tab_emp)
         
-        # 左側：員工列表
         left_panel = QGroupBox("現有員工名單")
         left_layout = QVBoxLayout()
-        self.emp_list = QListWidget()
-        self.emp_list.setStyleSheet("font-size: 14px;")
-        self.emp_list.itemClicked.connect(self.on_emp_selected)
-        left_layout.addWidget(self.emp_list)
+        
+        self.edit_search = QLineEdit()
+        self.edit_search.setPlaceholderText("🔍 搜尋員工編號或姓名...")
+        self.edit_search.textChanged.connect(self.proxy_model.setFilterFixedString) 
+        left_layout.addWidget(self.edit_search)
+        
+        # 使用 QListView 搭配代理模型
+        self.emp_view = QListView()
+        self.emp_view.setModel(self.proxy_model)
+        self.emp_view.setStyleSheet("font-size: 14px;")
+        # 連結到正確的 v2 方法
+        self.emp_view.clicked.connect(self.on_emp_selected_v2) 
+        left_layout.addWidget(self.emp_view)
         
         self.btn_delete = QPushButton("刪除選取員工")
         self.btn_delete.setStyleSheet("background-color: #ffcccc; color: red; padding: 8px;")
@@ -142,7 +196,14 @@ class AdminWindow(QMainWindow):
         self.btn_register.setStyleSheet("background-color: #ccffcc; color: green; font-weight: bold; padding: 10px;")
         self.btn_register.clicked.connect(self.register_employee)
         self.btn_register.setEnabled(False) 
+
+        self.btn_reset = QPushButton("↺ 取消編輯 / 回到新增模式")
+        self.btn_reset.setStyleSheet("background-color: #f0f0f0; color: #555; padding: 8px;")
+        self.btn_reset.clicked.connect(self.reset_form) # 連結到現有的 reset_form 方法
+
         right_layout.addWidget(self.btn_register)
+        right_layout.addWidget(self.btn_reset)
+
         right_layout.addStretch()
         right_panel.setLayout(right_layout)
         layout.addWidget(right_panel, stretch=1)
@@ -154,11 +215,18 @@ class AdminWindow(QMainWindow):
         layout = QVBoxLayout(self.tab_approval)
         
         top_bar = QHBoxLayout()
+        
+        # 全選控制項
+        self.chk_select_all = QCheckBox("全選所有項目")
+        self.chk_select_all.stateChanged.connect(self.toggle_select_all)
+        top_bar.addWidget(self.chk_select_all)
+        
+        top_bar.addStretch()
+        
         btn_refresh = QPushButton("🔄 重新整理")
         btn_refresh.clicked.connect(self.refresh_approval_list)
-        top_bar.addWidget(QLabel("待審核申請列表 (請勾選要處理的項目)"))
-        top_bar.addStretch()
         top_bar.addWidget(btn_refresh)
+        
         layout.addLayout(top_bar)
         
         self.table_approval = QTableWidget()
@@ -331,27 +399,34 @@ class AdminWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "錯誤", f"匯出失敗：{str(e)}\n請確認是否已安裝 openpyxl")
 
-    # ==========================================
-    # 以下為 Tab 1 & Tab 2 的原有邏輯 (保持不變)
-    # ==========================================
-
     def refresh_employee_list(self):
-        self.emp_list.clear()
+        self.emp_model.clear()
         employees = self.db.load_all_employees()
         for emp_id, data in employees.items():
             shift_info = data.get('default_shift')
             shift_str = f"[{shift_info}]" if shift_info else ""
             item_text = f"{emp_id} - {data['name']} {shift_str}"
-            self.emp_list.addItem(item_text)
+            
+            item = QStandardItem(item_text)
+            # 關鍵：儲存 ID，這樣過濾後才抓得對人
+            item.setData(emp_id, Qt.UserRole) 
+            self.emp_model.appendRow(item)
 
-    def on_emp_selected(self, item):
-        text = item.text()
-        parts = text.split(" - ")
+    def on_emp_selected_v2(self, index):
+        """處理模型視圖點擊，支援搜尋後的正確映射"""
+        source_index = self.proxy_model.mapToSource(index)
+        item = self.emp_model.itemFromIndex(source_index)
+        emp_id = item.data(Qt.UserRole)
+        
+        parts = item.text().split(" - ")
         if len(parts) >= 2:
-            self.input_id.setText(parts[0])
-            self.input_name.setText(parts[1].split(" [")[0])
-            self.btn_register.setText("更新資料 (需重新上傳照片)")
-            self.btn_register.setEnabled(True)
+            name = parts[1].split(" [")[0]
+            self.input_id.setText(emp_id)
+            self.input_id.setReadOnly(True) # 鎖定 ID
+            self.input_id.setStyleSheet("background-color: #e9ecef;")
+            self.input_name.setText(name)
+            self.btn_register.setText("更新員工資料 (需重新上傳照片)")
+            self.btn_register.setEnabled(False)
 
     def load_image(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "選擇照片", "", "Images (*.png *.jpg *.jpeg *.bmp)")
@@ -360,15 +435,56 @@ class AdminWindow(QMainWindow):
             img = cv2.imdecode(np.fromfile(file_path, dtype=np.uint8), cv2.IMREAD_COLOR)
         except:
             img = None
+            
         if img is None: return
+        
+        # 1. 偵測人臉
         faces = self.recognizer.app.get(img)
         if len(faces) == 0:
-            QMessageBox.warning(self, "失敗", "找不到人臉")
+            QMessageBox.warning(self, "失敗", "找不到人臉，請更換照片")
             return
+            
+        # 2. 取最大人臉
         if len(faces) > 1:
              faces = sorted(faces, key=lambda x: (x.bbox[2]-x.bbox[0]) * (x.bbox[3]-x.bbox[1]), reverse=True)
         face = faces[0]
+        
+        # 3. 提取特徵
         self.current_feature = face.normed_embedding 
+        
+        # === 防呆機制：全庫特徵比對 ===
+        try:
+            employees = self.db.load_all_employees()
+            max_score = 0.0
+            similar_emp_name = ""
+            similar_emp_id = ""
+            
+            # 遍歷所有員工進行 1:N 比對
+            for eid, data in employees.items():
+                # 如果是「更新模式」且比對到自己，就跳過 (自己跟自己像很正常)
+                if self.input_id.isReadOnly() and eid == self.input_id.text():
+                    continue
+                    
+                # 計算相似度 (直接呼叫 recognizer 的數學函式)
+                score = self.recognizer.compute_similarity(self.current_feature, data['base'])
+                if score > max_score:
+                    max_score = score
+                    similar_emp_name = data['name']
+                    similar_emp_id = eid
+            
+            # 門檻值判斷 (0.5 為 InsightFace 的危險區)
+            if max_score > 0.5:
+                QMessageBox.warning(self, "相似度過高警告", 
+                    f"⚠️ 注意：這張照片與現有員工高度相似！\n\n"
+                    f"相似對象：{similar_emp_name} ({similar_emp_id})\n"
+                    f"相似分數：{max_score:.2f}\n\n"
+                    f"請確認該員工是否重複註冊，或照片是否混淆。")
+                    
+        except Exception as e:
+            print(f"相似度檢查錯誤: {e}")
+        # ===================================
+
+        # 4. 顯示預覽圖 (原邏輯)
         b = list(map(int, face.bbox))
         face_crop = img[max(0,b[1]):b[3], max(0,b[0]):b[2]]
         if face_crop.size > 0:
@@ -384,31 +500,87 @@ class AdminWindow(QMainWindow):
         name = self.input_name.text().strip()
         pwd = self.input_pwd.text().strip()
         shift = self.combo_shift.currentData() 
-        if not emp_id or not name: return
-        if self.current_feature is None: return
+        
+        if not emp_id or not name: 
+            QMessageBox.warning(self, "提示", "ID 與 姓名 為必填欄位")
+            return
+            
+        if self.current_feature is None: 
+            QMessageBox.warning(self, "提示", "請先上傳並確認證件照")
+            return
+        
+        # === 防呆機制：ID 重複檢查 ===
+        # 只有在「新增模式」(ID 可編輯) 時才需要檢查
+        # 如果是「更新模式」(ID 唯讀)，代表使用者本來就是要更新這個人，不用擋
+        if not self.input_id.isReadOnly():
+            existing_employees = self.db.load_all_employees()
+            if emp_id in existing_employees:
+                old_name = existing_employees[emp_id]['name']
+                # 跳出確認視窗
+                reply = QMessageBox.question(self, "ID 已存在", 
+                    f"員工編號 {emp_id} 已經存在！\n"
+                    f"原登記姓名：{old_name}\n\n"
+                    f"您確定要「覆蓋」並更新這位員工的資料嗎？",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                
+                if reply == QMessageBox.No:
+                    return # 使用者按取消，中止註冊
+        # ===================================
+        
         try:
+            # 1. 寫入資料庫
             self.db.register_employee(emp_id, name, self.current_feature, password=pwd if pwd else None, default_shift=shift)
+            
+            # 2. 儲存照片
             if self.current_face_img is not None:
                 os.makedirs("data/faces", exist_ok=True)
                 safe_name = name.replace(" ", "_")
                 filename = f"{emp_id}_{safe_name}.jpg"
                 save_path = os.path.join("data/faces", filename)
                 cv2.imencode('.jpg', self.current_face_img)[1].tofile(save_path)
+            
             QMessageBox.information(self, "成功", f"員工 {name} 資料已更新！")
+            
+            # 3. 成功後：重新整理清單 + 重置表單
             self.refresh_employee_list()
-            self.input_id.clear(); self.input_name.clear(); self.lbl_preview.clear(); self.current_feature = None
+            self.reset_form() 
+            
         except Exception as e:
             QMessageBox.critical(self, "錯誤", str(e))
 
     def delete_employee(self):
-        current_item = self.emp_list.currentItem()
-        if not current_item: return
-        emp_id = current_item.text().split(" - ")[0]
-        if QMessageBox.question(self, "確認", "確定刪除？", QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
-            with self.db._get_connection() as conn:
-                conn.execute("DELETE FROM employees WHERE employee_id=?", (emp_id,))
-                conn.execute("DELETE FROM logs WHERE employee_id=?", (emp_id,))
-            self.refresh_employee_list()
+        # 修正：從 QListView 的 selectionModel 獲取選中的索引
+        selection_model = self.emp_view.selectionModel()
+        selected_indexes = selection_model.selectedIndexes()
+        
+        if not selected_indexes:
+            QMessageBox.warning(self, "提示", "請先選取要刪除的員工")
+            return
+            
+        # 取得第一個選中項目的 ID (透過 Proxy Model 映射回 Source Model)
+        index = selected_indexes[0]
+        source_index = self.proxy_model.mapToSource(index)
+        item = self.emp_model.itemFromIndex(source_index)
+        
+        # 讀取隱藏在 Item 中的員工 ID
+        emp_id = item.data(Qt.UserRole)
+        
+        # 為了安全，顯示員工姓名給使用者確認
+        display_text = item.text()
+        name = display_text.split(" - ")[1].split(" [")[0] if " - " in display_text else emp_id
+
+        if QMessageBox.question(self, "確認", f"確定刪除員工 {name} ({emp_id})？\n這將一併刪除其所有打卡紀錄且無法恢復。", 
+                                QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+            try:
+                with self.db._get_connection() as conn:
+                    conn.execute("DELETE FROM employees WHERE employee_id=?", (emp_id,))
+                    conn.execute("DELETE FROM logs WHERE employee_id=?", (emp_id,))
+                
+                self.refresh_employee_list()
+                self.reset_form() # 刪除後清空表單，避免畫面上殘留已不存在的資料
+                QMessageBox.information(self, "成功", "資料已移除")
+            except Exception as e:
+                QMessageBox.critical(self, "錯誤", f"刪除失敗：{str(e)}")
 
     def refresh_approval_list(self):
         self.table_approval.setRowCount(0)
@@ -443,34 +615,48 @@ class AdminWindow(QMainWindow):
             self.refresh_approval_list()
 
     def perform_backup(self):
-        import sqlite3
+        """啟動非同步備份"""
+        self.btn_backup.setEnabled(False)
+        self.btn_backup.setText("⏳ 備份進行中...請稍候")
         
-        db_path = "data/attendance.db"
-        backup_dir = "backup"
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = os.path.join(backup_dir, f"attendance_backup_{timestamp}.db")
-        
-        if not os.path.exists(backup_dir):
-            os.makedirs(backup_dir)
+        # 實例化 Worker (傳入 db_path)
+        db_path = self.db.db_path if hasattr(self.db, 'db_path') else "data/attendance.db"
+        self.backup_thread = BackupWorker(db_path)
+        self.backup_thread.finished_signal.connect(self.on_backup_finished)
+        self.backup_thread.start()
 
-        try:
-            # 連接到現有資料庫
-            src_conn = sqlite3.connect(db_path)
-            # 連接到備份目標檔案 (會自動建立)
-            dst_conn = sqlite3.connect(backup_path)
-            
-            with dst_conn:
-                # 使用 SQLite 的 Online Backup API
-                # 這會自動處理鎖定問題，確保備份的一致性
-                src_conn.backup(dst_conn)
-            
-            dst_conn.close()
-            src_conn.close()
-            
-            QMessageBox.information(self, "成功", f"安全備份完成！\n{backup_path}")
-            
-        except Exception as e:
-            QMessageBox.critical(self, "失敗", str(e))
+    def on_backup_finished(self, success, result_msg):
+        """備份完成後的 Callback"""
+        self.btn_backup.setEnabled(True)
+        self.btn_backup.setText("💾 立即備份資料庫")
+        
+        if success:
+            QMessageBox.information(self, "備份成功", f"資料庫已安全備份至：\n{result_msg}")
+        else:
+            QMessageBox.critical(self, "備份失敗", f"發生錯誤：{result_msg}")
+
+    def reset_form(self):
+        """回到新增模式"""
+        self.input_id.clear()
+        self.input_id.setReadOnly(False)
+        self.input_id.setStyleSheet("")
+        self.input_name.clear()
+        self.input_pwd.clear()
+        self.lbl_preview.clear()
+        self.lbl_preview.setText("請上傳證件照")
+        self.current_feature = None
+        self.current_face_img = None
+        self.btn_register.setText("確認註冊新員工")
+        self.btn_register.setEnabled(False)
+
+    def toggle_select_all(self, state):
+        """批次勾選/取消勾選"""
+        is_checked = (state == Qt.Checked)
+        for row in range(self.table_approval.rowCount()):
+            item = self.table_approval.item(row, 0)
+            # 只有在 Item 啟用的狀態下才勾選 (避免勾選到無效項目)
+            if item.flags() & Qt.ItemIsEnabled:
+                item.setCheckState(Qt.Checked if is_checked else Qt.Unchecked)
 
     def approve_request(self): self.process_request('approved')
     def reject_request(self): self.process_request('rejected')

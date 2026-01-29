@@ -5,7 +5,8 @@ import numpy as np
 import yaml
 from datetime import datetime
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QLabel, 
-                             QVBoxLayout)
+                             QVBoxLayout, QDialog, QLineEdit, QFormLayout, 
+                             QDialogButtonBox, QMessageBox)
 from PySide6.QtCore import QThread, Signal, Slot, Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap, QFont
 
@@ -14,6 +15,36 @@ from src.core.detector import FaceDetector
 from src.core.recognizer import FaceRecognizer
 from src.core.database import AttendanceDB
 from src.utils.voice import speak_success
+
+# === 手動密碼驗證對話框 ===
+class ManualLoginDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("輔助驗證 (信心度不足)")
+        self.setFixedSize(300, 160)
+        self.setStyleSheet("font-size: 14px;")
+        
+        layout = QFormLayout(self)
+        
+        self.info_label = QLabel("系統無法確認您的身分，\n請輸入密碼進行驗證。")
+        self.info_label.setStyleSheet("color: #E67E22; font-weight: bold; margin-bottom: 10px;")
+        self.info_label.setAlignment(Qt.AlignCenter)
+        layout.addRow(self.info_label)
+        
+        self.id_input = QLineEdit()
+        self.id_input.setPlaceholderText("請輸入員工 ID")
+        
+        self.pwd_input = QLineEdit()
+        self.pwd_input.setEchoMode(QLineEdit.Password)
+        self.pwd_input.setPlaceholderText("請輸入密碼")
+        
+        layout.addRow("員工 ID:", self.id_input)
+        layout.addRow("密碼:", self.pwd_input)
+        
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
 
 class VideoThread(QThread):
     change_pixmap_signal = Signal(np.ndarray, dict)
@@ -161,38 +192,75 @@ class MainWindow(QMainWindow):
         print(f"🔍 [Debug] Match Result: ID={emp_id}, Score={score:.4f}")
         
         if emp_id:
+            # === 辨識成功 ===
             photo_name = f"data/logs/{emp_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
             success, message = self.recognizer.process_attendance(
                 emp_id, score, evolve, live_feat, photo_name, details
             )
             
             if success:
-                current_time = datetime.now().strftime("%H:%M:%S")
-                is_warning = details.get('warning', False)
-                
-                if is_warning:
-                    display_text = f"✅ 打卡成功\n⚠️ 證件照差異過大，請通知管理員\nID: {emp_id}"
-                    # 黃字警告
-                    text_color = "#F1C40F" 
-                else:
-                    display_text = f"✅ 打卡成功\nID: {emp_id}\n時間: {current_time}"
-                    # 綠字成功
-                    text_color = "#2ECC71"
-                
-                self.status_label.setText(display_text)
-                self.status_label.setStyleSheet(f"background-color: rgba(0,0,0,180); color: {text_color}; border-radius: 5px; font-weight: bold;")
-                
-                speak_success()
+                # [修改] 改用 helper function 顯示成功，方便手動驗證也能共用
+                self.show_success_feedback(emp_id, details)
                 os.makedirs("data/logs", exist_ok=True)
                 cv2.imwrite(photo_name, face_img)
             else:
                 self.status_label.setText(message)
                 self.status_label.setStyleSheet("background-color: rgba(0,0,0,160); color: #E67E22; border-radius: 5px;")
+                QTimer.singleShot(3000, self.reset_recognition)
+                
         else:
-            msg = f"辨識失敗 (信心度不足)"
-            self.status_label.setText(msg)
-            self.status_label.setStyleSheet("background-color: rgba(0,0,0,160); color: #E74C3C; border-radius: 5px;")
+            # === 辨識失敗 ===
+            # 輔助驗證：如果分數在模糊地帶 (> 0.4)，啟動密碼驗證
+            if score > 0.4:
+                self.handle_manual_login(score)
+            else:
+                msg = f"辨識失敗 (信心度不足: {score:.2f})"
+                self.status_label.setText(msg)
+                self.status_label.setStyleSheet("background-color: rgba(0,0,0,160); color: #E74C3C; border-radius: 5px;")
+                QTimer.singleShot(3000, self.reset_recognition)
+
+    def handle_manual_login(self, score):
+        """處理手動密碼驗證流程"""
+        self.status_label.setText(f"信心度 {score:.2f} (不足)\n請進行輔助驗證...")
         
+        # 彈出對話框 (會暫停 UI 互動，但 VideoThread 仍會跑，造成畫面凍結是正常的)
+        dialog = ManualLoginDialog(self)
+        if dialog.exec() == QDialog.Accepted:
+            uid = dialog.id_input.text().strip()
+            pwd = dialog.pwd_input.text().strip()
+            
+            # 呼叫資料庫驗證密碼
+            if self.db.verify_password(uid, pwd):
+                # 驗證成功：手動寫入 Log (標記 photo_path 為 MANUAL_PWD)
+                self.db.add_attendance_log(uid, 1.0, "MANUAL_PWD", {'base_score': 0, 'dynamic_score': 0})
+                
+                # 顯示成功 (使用空的 details)
+                self.show_success_feedback(uid, {})
+            else:
+                self.status_label.setText("❌ 密碼驗證失敗，請重試")
+                self.status_label.setStyleSheet("background-color: rgba(0,0,0,160); color: red; border-radius: 5px;")
+                QTimer.singleShot(3000, self.reset_recognition)
+        else:
+            # 使用者按取消
+            self.status_label.setText("驗證取消")
+            QTimer.singleShot(3000, self.reset_recognition)
+
+    def show_success_feedback(self, emp_id, details):
+        """顯示打卡成功訊息 (抽離出來共用)"""
+        current_time = datetime.now().strftime("%H:%M:%S")
+        is_warning = details.get('warning', False)
+        
+        if is_warning:
+            display_text = f"✅ 打卡成功\n⚠️ 證件照差異過大，請通知管理員\nID: {emp_id}"
+            text_color = "#F1C40F" 
+        else:
+            display_text = f"✅ 打卡成功\nID: {emp_id}\n時間: {current_time}"
+            text_color = "#2ECC71"
+        
+        self.status_label.setText(display_text)
+        self.status_label.setStyleSheet(f"background-color: rgba(0,0,0,180); color: {text_color}; border-radius: 5px; font-weight: bold;")
+        
+        speak_success()
         QTimer.singleShot(3000, self.reset_recognition)
 
     def reset_recognition(self):
