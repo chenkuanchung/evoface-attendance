@@ -539,9 +539,12 @@ class AdminWindow(QMainWindow):
                 save_path = os.path.join("data/faces", filename)
                 cv2.imencode('.jpg', self.current_face_img)[1].tofile(save_path)
             
+            # 3. 立即重載特徵庫，讓新員工生效
+            self.recognizer.reload_employees() 
+
             QMessageBox.information(self, "成功", f"員工 {name} 資料已更新！")
             
-            # 3. 成功後：重新整理清單 + 重置表單
+            # 4. 成功後：重新整理清單 + 重置表單
             self.refresh_employee_list()
             self.reset_form() 
             
@@ -576,6 +579,7 @@ class AdminWindow(QMainWindow):
                     conn.execute("DELETE FROM employees WHERE employee_id=?", (emp_id,))
                     conn.execute("DELETE FROM logs WHERE employee_id=?", (emp_id,))
                 
+                self.recognizer.reload_employees() # 刪除後也要重載，清除記憶體中的特徵
                 self.refresh_employee_list()
                 self.reset_form() # 刪除後清空表單，避免畫面上殘留已不存在的資料
                 QMessageBox.information(self, "成功", "資料已移除")

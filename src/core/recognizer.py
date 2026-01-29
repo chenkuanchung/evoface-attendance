@@ -24,6 +24,8 @@ class FaceRecognizer:
         # 2. 初始化相關組件
         self.db = AttendanceDB(config_path=config_path)
         self.img_tool = ImagePreprocessor()
+        # 啟動時預先載入所有特徵到記憶體
+        self.reload_employees()
         
         # 3. 讀取門檻值
         self.rec_threshold = self.config.get('thresholds', {}).get('recognition_confidence', 0.5)
@@ -35,6 +37,42 @@ class FaceRecognizer:
         # 4. 讀取辨識權重與距離門檻
         self.base_weight = self.config.get('recognition', {}).get('base_weight', 0.4)
         self.dynamic_weight = self.config.get('recognition', {}).get('dynamic_weight', 0.6)
+
+    def reload_employees(self):
+        """
+        [效能優化] 將所有員工資料轉為 Numpy 矩陣 (Cache)，避免每次辨識都讀資料庫。
+        """
+        all_data = self.db.load_all_employees()
+        
+        self.emp_ids = []           # 順序對應的 ID 列表
+        self.base_feats = []        # 原始特徵列表
+        self.dynamic_feats = []     # 動態特徵列表
+        self.has_dynamic_flags = [] # 標記該員工是否有動態特徵 (演進邏輯用)
+        
+        for eid, data in all_data.items():
+            self.emp_ids.append(eid)
+            self.base_feats.append(data['base'])
+            
+            # 處理動態特徵：如果沒有，就暫時用 base 填補 (為了矩陣形狀一致)
+            if data['dynamic'] is not None:
+                self.dynamic_feats.append(data['dynamic'])
+                self.has_dynamic_flags.append(True)
+            else:
+                self.dynamic_feats.append(data['base']) # 用 Base 填補空缺
+                self.has_dynamic_flags.append(False)
+                
+        # 轉為 Numpy 矩陣，形狀為 (N, 512)
+        if self.emp_ids:
+            self.base_matrix = np.array(self.base_feats)
+            self.dynamic_matrix = np.array(self.dynamic_feats)
+            self.has_dynamic_flags = np.array(self.has_dynamic_flags)
+        else:
+            # 防止資料庫為空時報錯
+            self.base_matrix = np.empty((0, 512))
+            self.dynamic_matrix = np.empty((0, 512))
+            self.has_dynamic_flags = np.array([])
+
+        print(f"✅ 特徵庫載入完成，共 {len(self.emp_ids)} 人。")
 
     def extract_feature(self, aligned_face):
         """
@@ -65,81 +103,78 @@ class FaceRecognizer:
 
     def identify(self, processed_face):
         """
-        執行 1:N 加權比對邏輯 (含使用者自定義演進策略)
+        執行 1:N 加權比對邏輯 (矩陣加速版)
         """
+        # 1. 提取鏡頭前的人臉特徵
         live_feat = self.extract_feature(processed_face)
         if live_feat is None:
             return None, 0.0, False, {}, None
 
-        all_employees = self.db.load_all_employees()
-        best_match_id = None
-        max_fused_score = -1.0
-        final_details = {}
+        # 如果沒人或矩陣沒初始化
+        if not hasattr(self, 'base_matrix') or self.base_matrix.shape[0] == 0:
+             return None, 0.0, False, {}, live_feat
         
+        # A. 融合特徵 (一次算出所有人的融合特徵) Shape: (N, 512)
+        fused_matrix = (self.base_matrix * self.base_weight) + (self.dynamic_matrix * self.dynamic_weight)
         
-        best_dynamic_feat_vector = None # 用來暫存最佳匹配者的動態特徵
+        # B. 矩陣正規化 (L2 Norm)，確保長度為 1
+        # axis=1 代表對每一個 row (每個人) 算長度
+        norms = np.linalg.norm(fused_matrix, axis=1, keepdims=True)
+        norms[norms == 0] = 1e-10 # 避免除以 0
+        fused_matrix = fused_matrix / norms
+        
+        # C. 計算相似度 (一次算出 live_feat 跟 4000 人的分數)
+        # Shape: (N,) -> 每個人的分數
+        fused_scores = np.dot(fused_matrix, live_feat)
+        
+        # D. 直接找出最高分是誰 (Argmax)
+        best_idx = np.argmax(fused_scores)       # 找出最高分的「索引位置」
+        max_fused_score = float(fused_scores[best_idx]) # 取出該分數
+        best_emp_id = self.emp_ids[best_idx]     # 取出該員工 ID
+        
+        best_base_feat = self.base_matrix[best_idx]
+        best_dyn_feat = self.dynamic_matrix[best_idx]
+        has_dynamic = self.has_dynamic_flags[best_idx] # 查表看他有沒有真正的 Dynamic
+        
+        # 單獨計算 Base 分數 (為了警告判斷)
+        base_score = float(self.compute_similarity(live_feat, best_base_feat))
+        
+        # 單獨計算 Dynamic 分數 (為了演進判斷)
+        dyn_score = 0.0
+        if has_dynamic:
+            dyn_score = float(self.compute_similarity(live_feat, best_dyn_feat))
+            
+        # 診斷輸出 (只印最高分的，避免 4000 行洗版)
+        if max_fused_score > 0.4:
+             print(f"📊 [診斷] ID: {best_emp_id} | 總分: {max_fused_score:.2f} | Base: {base_score:.2f} | Dynamic: {dyn_score:.2f}")
+
         should_evolve = False
-        low_base_warning = False # 判斷是否需要警告 (Base < 0.4)
+        if has_dynamic:
+            # 既有邏輯：Base 不錯 或 Dynamic 很好
+            if base_score > self.evo_min_base or dyn_score > self.evo_min_dyn:
+                should_evolve = True
+        else:
+            # 冷啟動邏輯
+            if max_fused_score > self.evo_threshold:
+                should_evolve = True
 
-        for emp_id, data in all_employees.items():
-            base_feat = data['base']
-            dynamic_feat = data['dynamic']
-            
-            # --- 動態權重融合 ---
-            if dynamic_feat is not None:
-                fused_feat = (base_feat * self.base_weight) + (dynamic_feat * self.dynamic_weight)
-                fused_feat = fused_feat / np.linalg.norm(fused_feat)
-            else:
-                fused_feat = base_feat
-            
-            # 計算分數
-            fused_score = self.compute_similarity(live_feat, fused_feat)
-            base_score = self.compute_similarity(live_feat, base_feat)
-            dyn_score = self.compute_similarity(live_feat, dynamic_feat) if dynamic_feat is not None else 0.0
+        # 警告邏輯
+        low_base_warning = (base_score < self.warn_base_th)
 
-            # 診斷輸出
-            if fused_score > 0.4:
-                print(f"📊 [診斷] ID: {emp_id} | 總分: {fused_score:.2f} | Base: {base_score:.2f} | Dynamic: {dyn_score:.2f}")
+        final_details = {
+            "base_score": base_score,
+            "dynamic_score": dyn_score,
+            "fused_score": max_fused_score,
+            "warning": low_base_warning,
+            # 如果有 Dynamic，傳回舊的供融合；如果沒有，傳回 None
+            "matched_old_dynamic": best_dyn_feat if has_dynamic else None
+        }
 
-            if fused_score > max_fused_score:
-                max_fused_score = fused_score
-                best_match_id = emp_id
-                best_dynamic_feat_vector = dynamic_feat
-                
-                # === 使用者的演進邏輯 ===
-                if dynamic_feat is not None:
-                    # 條件：如果 Dynamic 已經存在...
-                    # 1. Base 分數尚可 (> 0.5) -> 代表這真的是本人，可以用來修復/更新 Dynamic
-                    # 2. Dynamic 分數極高 (> 0.85) -> 代表狀態極佳，保持更新
-                    if base_score > self.evo_min_base or dyn_score > self.evo_min_dyn:
-                        should_evolve = True
-                    else:
-                        should_evolve = False
-                else:
-                    # 冷啟動：還沒有 Dynamic 時，門檻設低一點以便建立第一個模型
-                    if fused_score > self.evo_threshold: # 預設值
-                        should_evolve = True
-
-                # === 警告判斷 ===
-                # 如果 Base 低於 0.3，標記警告 (建議通知管理員)
-                if base_score < self.warn_base_th:
-                    low_base_warning = True
-                else:
-                    low_base_warning = False
-
-                final_details = {
-                    "base_score": float(base_score),
-                    "dynamic_score": float(dyn_score),
-                    "fused_score": float(fused_score),
-                    "warning": low_base_warning, # 傳遞警告狀態
-                    "matched_old_dynamic": best_dynamic_feat_vector
-                }
-
-        # 檢查是否達到基本辨識門檻
+        # 最後門檻判定 (0.5)
         if max_fused_score >= self.rec_threshold:
-            return best_match_id, float(max_fused_score), should_evolve, final_details, live_feat
+            return best_emp_id, max_fused_score, should_evolve, final_details, live_feat
         
-        return None, float(max_fused_score), False, final_details, live_feat
+        return None, max_fused_score, False, final_details, live_feat
 
     def process_attendance(self, emp_id, score, should_evolve, live_feat, photo_path, details):
         """
