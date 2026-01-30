@@ -62,7 +62,7 @@ thresholds:
   # 4. 人臉辨識相關門檻
   recognition_confidence: 0.5
   evolution_confidence: 0.5     # 有了 dynamic feature 之後會調升成0.85
-  warning_base_score: 0.3       # Base 分數低於此值顯示黃字警告
+  warning_base_score: 0.4       # Base 分數低於此值顯示黃字警告
   evolution_min_base: 0.5       # 特徵演進條件：Base 最低要求
   evolution_min_dynamic: 0.85   # 特徵演進條件：Dynamic 強度要求
   ambiguity_gap: 0.05           # 第一名與第二名的分數差距若小於此值，視為無法判定
