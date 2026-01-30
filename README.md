@@ -1,46 +1,51 @@
 # EvoFace - 企業級 AI 人臉辨識考勤系統
 ### Enterprise AI Face Recognition Attendance System
 
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue) ![PySide6](https://img.shields.io/badge/GUI-PySide6-green) ![InsightFace](https://img.shields.io/badge/AI-InsightFace-orange) ![SQLite](https://img.shields.io/badge/Database-SQLite%20(WAL)-lightgrey)
+
 EvoFace 是一套整合 **即時人臉辨識**、**活體防偽偵測** 與 **自動化考勤計算** 的全方位解決方案。
-系統採用 InsightFace (ArcFace) 作為辨識核心，並結合 Silent-Face (MiniFASNet) 進行防照片/影片攻擊，適合中小企業進行打卡管理。
+系統採用 **InsightFace (ArcFace)** 作為辨識核心，結合 **Silent-Face (MiniFASNet)** 進行防偽，並針對企業落地需求進行了 **資料庫併發優化 (WAL Mode)** 與 **非同步多執行緒架構 (QThread)** 改造，確保在高負載打卡場景下的穩定性與流暢度。
 
 EvoFace is a comprehensive solution integrating **Real-time Face Recognition**, **Liveness Detection**, and **Automated Attendance Calculation**.
-Powered by **InsightFace (ArcFace)** for recognition and **Silent-Face (MiniFASNet)** for anti-spoofing, it effectively defends against photo/video attacks, making it an ideal attendance management system for SMBs.
+Powered by **InsightFace (ArcFace)** and **Silent-Face (MiniFASNet)**, it features **database concurrency optimization (WAL Mode)** and **asynchronous multi-threading architecture**, ensuring stability and smoothness in high-load scenarios.
 
-## 🌟 核心功能 (Key Features)
+## 🌟 核心功能與技術亮點 (Key Features & Tech Highlights)
 
-### 1. 高精度人臉辨識與活體防禦
-- **雙重引擎**：使用 MediaPipe 進行快速人臉定位，搭配 InsightFace (Buffalo_L) 提取高維特徵向量 (Vector Embeddings)，透過餘弦相似度運算實現毫秒級精準比對。
-- **強健的遮擋適應性 (Occlusion Robustness)**：
-  - **口罩/眼鏡支援**：經參數調校，系統可在佩戴眼鏡或口罩的情況下完成辨識，但註冊後的首次辨識在**不配戴口罩**的情況下較容易成功。
-  - **智慧演進保護**：當偵測到面部有遮擋（如口罩）導致信心度下降，但仍高於最低辨識門檻時，系統會**允許打卡但暫停特徵更新 (Feature Update)**，防止遮擋的特徵汙染資料庫中的演進特徵。
-- **活體檢測 (Anti-Spoofing)**：內建 Silent-Face 活體分析引擎，有效防禦手機翻拍、照片列印等攻擊。
-- **動態特徵演進 (Dynamic Evolution)**：系統會隨著員工日常打卡，自動更新人臉特徵模型（權重融合），適應髮型或樣貌的微小變化。
+### 1. 企業級高效能架構 (Enterprise Performance)
+- **非同步多執行緒 (Asynchronous Multi-threading)**：
+  - 採用 **Producer-Consumer 模式**，將繁重的 AI 辨識運算移至獨立的 `RecognitionWorker` (QThread)，確保 UI 介面在千人規模推論下依然保持極致流暢。
+- **資料庫高併發控制 (WAL Mode)**：
+  - 啟用 SQLite 的 **Write-Ahead Logging (WAL)** 模式，實現讀寫分離。前台員工打卡的同時，後台管理員可即時查詢報表，徹底解決傳統 SQLite 的鎖死 (Locking) 問題。
 
-### 2. 彈性考勤邏輯
-- **三班制支援**：內建早班、晚班、大夜班設定，支援 **跨日打卡** (例如 16:00 上班，隔日 01:00 下班)。
-- **智慧工時計算**：
-  - 自動判斷遲到 (緩衝 30 分鐘)。
-  - 符合勞基法邏輯的休息扣除 (滿 5 小時扣 1 小時休息，加班不另扣除休息時間)。
-  - 每日 04:00 自動換日切結。
+### 2. 智慧辨識與防誤判機制 (Intelligent Recognition)
+- **雙重引擎驗證**：
+  - 第一道防線：**MediaPipe** 進行毫秒級人臉定位與追蹤。
+  - 第二道防線：**InsightFace (Buffalo_L)** 提取 512 維特徵向量，透過矩陣化 (Vectorization) 運算實現精準比對。
+- **猶豫機制 (Ambiguity Detection)**：
+  - 引入 **Top-2 Gap Analysis**，當前兩名候選人分數差距過小 (<0.05) 時，系統自動進入「猶豫模式」並提示使用者調整角度，有效防止長相相似者的誤判。
+- **情境感知冷卻 (Context-Aware Cooldown)**：
+  - 具備智慧 Debounce 邏輯。當員工打卡後逗留（即使因遮擋導致分數下降），系統能識別身分並友善提示「打卡過於頻繁」，而非錯誤跳出「身分驗證失敗」視窗。
 
-### 3. 雙平台整合介面
+### 3. 動態特徵演進 (Dynamic Evolution)
+- **自適應權重融合**：
+  - 系統會自動捕捉員工的高信心度打卡照片，以 **0.1 (Alpha)** 的權重柔和更新 **員工動態特徵 (Dynamic Features)**。
+- **記憶體熱更新 (Hot-Update)**：
+  - 演進後的特徵即時同步至 RAM，無需重啟系統即可生效，讓系統隨著時間「越用越準」，自動適應髮型或樣貌的微小變化。
+
+### 4. 彈性考勤與雙平台介面
+- **三班制與跨日支援**：內建早班、晚班、大夜班邏輯，完美支援 **跨日打卡** (如 16:00 上班，隔日 01:00 下班)。
 - **管理端 (Admin Dashboard - PySide6)**：
-  - 員工資料註冊 (**支援照片檔案上傳，不須請員工另行現場拍照**)。
-  - 考勤異常補登簽核 (註：正常商業邏輯應寄送 Email 由主管核准，此處簡化由管理員直接核准)。
-  - 考勤報表查詢與 Excel 匯出。
+  - 支援 **照片檔案註冊 (File Upload)（不強制現場拍照）**、考勤補登簽核、報表 Excel 匯出。
 - **員工端 (Web Portal - Streamlit)**：
-  - 個人考勤紀錄查詢。
-  - 考勤報表查詢與 Excel 匯出。
-  - 線上申請補登 (忘記打卡/請假)。
+  - 員工可透過瀏覽器 (Web) 自助查詢個人考勤紀錄與申請補登。
 
 ---
 
 ## 🛠️ 安裝與環境設定 (Installation)
 
 ### 1. 系統需求
-- Python 3.8+
-- 建議使用 NVIDIA GPU (需安裝 CUDA) 以獲得最佳效能，亦可使用 CPU 模式。
+- Python 3.10+
+- 建議使用 NVIDIA GPU (需安裝 CUDA) 以獲得最佳效能，本系統亦針對 CPU 進行了 ONNX Runtime 最佳化。
 - 網路攝影機 (Webcam)
 
 ### 2. 安裝步驟
@@ -60,58 +65,64 @@ source .venv/bin/activate
 # 3. 安裝依賴套件
 pip install -r requirements.txt
 ```
+
 ---
 
 ## 🚀 快速啟動 (Usage)
 
-本系統分為 **前台打卡端** 與 **後台管理端**，建議使用內建腳本啟動。
+本系統已整合 **前台打卡端**、**員工自助網頁** 與 **後台管理端**，建議直接使用內建的批次檔 (Batch File) 一鍵啟動。
 
 ### 🟢 啟動考勤主系統 (打卡鐘 + 員工網頁)
-執行 `Start_System.bat`
-- 這將同時啟動：
-  1. **人臉辨識主視窗**：員工打卡用。
-  2. **員工考勤查詢網頁**：
-     - **本機操作**：瀏覽器會自動開啟 (或輸入 `http://localhost:8501`)。
-     - **區網查詢**：同網域內的其他電腦/手機，可透過 `http://<主機IP>:8501` 進行遠端連線查詢。
+請執行 `Start_System.bat`，系統將自動並行啟動以下兩項服務：
+
+1.  **人臉辨識主視窗 (PySide6)**：
+    - 這是放置於公司門口的打卡終端機介面。
+    - 啟動後請等待攝影機預熱，員工即可開始刷臉打卡。
+
+2.  **員工考勤查詢網頁 (Streamlit)**：
+    - 啟動後瀏覽器會自動開啟，員工可查詢個人紀錄。
+    - **本機存取**：`http://localhost:8501`
+    - **區網存取**：同辦公室的其他電腦或手機，可輸入 `http://<主機IP>:8501` 進行遠端查詢。
 
 ### 🔵 啟動管理後台 (Admin)
-執行 `Start_Admin.bat`
-- 進入管理介面進行員工註冊、班表設定與報表匯出。
-- **首次使用請先進入後台註冊員工資料。**
+請執行 `Start_Admin.bat`
+- 開啟後台管理視窗，提供 **員工資料註冊**、**考勤補登簽核** 與 **考勤報表匯出** 功能。
+- **⚠️ 注意**：首次部署系統時，請務必先進入此後台完成員工建檔。
+- *(註：班表時間規則請於 `config.yaml` 中設定)*
 
 ### 🟠 資料備份 (Backup)
-執行 `Backup_Data.bat`
-- 系統會自動將資料庫 (`attendance.db`) 複製到 `backup/` 資料夾，並加上日期戳記，防止資料遺失。
-- **建議定期執行此腳本 (例如每週一次)。**
+請執行 `Backup_Data.bat`
+- 系統會自動將核心資料庫 (`attendance.db`) 完整備份至 `backup/` 資料夾，並自動加上時間戳記 (Timestamp)。
+- **建議排程**：建議每週五下班後或系統更新前執行一次，確保資料安全。
 
 ---
 
-## ⚙️ 參數設定 (Configuration)
+## ⚙️ 核心參數設定 (Configuration)
 
 所有核心參數皆位於 `config.yaml`，可依場域需求調整：
+
 ```yaml
 system:
-  device_mode: "auto"       # auto/gpu/cpu (推論硬體設定)
-  camera_index: 0           # 攝影機編號 (若抓不到畫面可改為 1)
+  device_mode: "auto"       # auto/gpu/cpu (推論硬體設定，auto 為自動偵測)
+  camera_index: 0           # 攝影機編號 (若使用外接 Webcam 可改為 1)
 
 attendance:
-  debounce_minutes: 1       # 防止重複打卡間隔 (分)
-  day_cutoff: "04:00"       # 每日換日結算點
+  debounce_minutes: 1       # 防止重複打卡間隔 (分鐘)
+  day_cutoff: "04:00"       # 每日換日結算點 (凌晨 4 點前打卡算「昨天」)
 
-# 三班制定義 (Format: HH:MM)
-# 邏輯：一班 9 小時 (含休 1 小時)。
+# 三班制時間定義 (請在此調整班表規則)
 shifts:
   morning:
     name: "早班"
-    start_time: "08:00"  # 標準上班
-    end_time: "17:00"    # 標準下班
-    range_start: "05:00" # 自動判斷區間起
-    range_end: "11:00"   # 自動判斷區間止
-  
+    start_time: "08:00"
+    end_time: "17:00"
+    range_start: "05:00"    # 自動判定區間：在此時間後打卡視為早班
+    range_end: "11:00"
+
   evening:
     name: "晚班"
     start_time: "16:00"
-    end_time: "01:00"    # 跨日
+    end_time: "01:00"       # 支援跨日設定
     range_start: "13:00"
     range_end: "19:00"
 
@@ -123,51 +134,55 @@ shifts:
     range_end: "03:00"
 
 thresholds:
-  recognition_confidence: 0.5  # 辨識門檻
-  texture_liveness: 0.98       # 活體防偽嚴格度 (越高越嚴)
-  warning_base_score: 0.3      # 相似度過低警告
-  evolution_min_base: 0.5      # 特徵演進最低門檻
+  recognition_confidence: 0.5  # 辨識信心門檻 (低於此值視為陌生人)
+  ambiguity_gap: 0.05          # 猶豫區間 (Top-1 與 Top-2 分數差距小於此值時，拒絕辨識)
+  texture_liveness: 0.98       # 活體防偽嚴格度 (建議值 0.95~0.99，越高越嚴)
+  warning_base_score: 0.4      # 原始證件照相似度過低警告 (提示可能為不同人或遮擋嚴重)
+  evolution_min_base: 0.5      # 特徵演進條件：需與原始證件照保持一定相似度
+  evolution_min_dynamic: 0.85  # 特徵演進條件：需與昨日動態特徵高度相似
 
 recognition:
-  min_face_ratio: 0.2          # 最小人臉佔比 (太遠不偵測)
+  min_face_ratio: 0.15         # 最小人臉佔比 (低於此比例視為過遠，不進行偵測)
+  base_weight: 0.3             # 原始證件照權重
+  dynamic_weight: 0.7          # 動態特徵權重 (權重越高越能適應戴口罩或造型變化)
 ```
 
 ---
 
-## 📂 專案結構
+## 📂 專案結構 (Project Structure)
 
 ```plaintext
 evoface-attendance/
 ├── data/
-│   ├── attendance.db          # SQLite 資料庫 (自動生成)
-│   ├── faces/                 # 員工註冊底圖
-│   └── logs/                  # 打卡現場快照
+│   ├── attendance.db      # SQLite 資料庫
+│   ├── faces/             # 員工註冊底圖
+│   └── logs/              # 打卡現場快照
 ├── models/
-│   ├── liveness/              # Silent-Face 活體偵測模型 (.onnx)
+│   ├── liveness/          # Silent-Face 活體偵測模型
 │   └── face_landmarker.task   # MediaPipe 人臉關鍵點模型
 ├── src/
-│   ├── core/                  # [核心] 系統邏輯層
-│   │   ├── calculator.py      # 考勤與工時計算邏輯
-│   │   ├── database.py        # 資料庫 CRUD 操作
-│   │   ├── detector.py        # MediaPipe 人臉偵測與追蹤
+│   ├── core/              # [核心] 系統邏輯層
+│   │   ├── calculator.py  # 考勤與工時計算邏輯
+│   │   ├── database.py    # 資料庫 CRUD 操作
+│   │   ├── detector.py    # MediaPipe 人臉偵測與追蹤
 │   │   ├── liveness_engine.py # Silent-Face 活體防偽引擎
-│   │   └── recognizer.py      # ArcFace 辨識與特徵演進
-│   ├── ui/                    # [介面] PySide6 視窗
+│   │   └── recognizer.py  # ArcFace 辨識與特徵演進
+│   ├── ui/                # [介面] PySide6 視窗
 │   │   ├── admin_window.py    # 後台管理介面
 │   │   └── main_window.py     # 前台打卡主視窗
-│   └── utils/                 # [工具] 通用模組
-│       ├── image_tool.py      # 影像對齊與裁切工具
-│       └── voice.py           # 語音提示功能 (TTS)
-├── admin.py                   # [入口] 管理後台啟動檔
-├── main.py                    # [入口] 打卡系統啟動檔
-├── webapp.py                  # [入口] 員工網頁端 (Streamlit)
-├── config.yaml                # 系統全域設定檔
-├── requirements.txt           # Python 依賴套件清單
-├── Start_System.bat           # [腳本] 一鍵啟動系統
-├── Start_Admin.bat            # [腳本] 一鍵啟動後台
-├── Backup_Data.bat            # [腳本] 資料庫備份工具
-├── README.md                  # 專案說明文件
-└── LICENSE                    # 授權條款
+│   └── utils/             # [工具] 通用模組
+│       ├── image_tool.py  # 影像對齊與裁切工具
+│       └── voice.py       # 語音提示功能
+├── admin.py               # [入口] 管理後台啟動檔
+├── main.py                # [入口] 打卡系統啟動檔
+├── webapp.py              # [入口] 員工網頁端
+├── config.yaml            # 系統全域設定檔
+├── requirements.txt       # Python 依賴套件清單
+├── Start_System.bat       # [腳本] 一鍵啟動系統
+├── Start_Admin.bat        # [腳本] 一鍵啟動後台
+├── Backup_Data.bat        # [腳本] 資料庫備份工具
+├── README.md              # 專案說明文件
+└── LICENSE                # 授權條款
 ```
 
 ---
