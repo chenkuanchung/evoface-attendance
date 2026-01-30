@@ -65,6 +65,7 @@ thresholds:
   warning_base_score: 0.3       # Base 分數低於此值顯示黃字警告
   evolution_min_base: 0.5       # 特徵演進條件：Base 最低要求
   evolution_min_dynamic: 0.85   # 特徵演進條件：Dynamic 強度要求
+  ambiguity_gap: 0.05           # 第一名與第二名的分數差距若小於此值，視為無法判定
 
 # 人臉辨識核心參數設定
 recognition:

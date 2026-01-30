@@ -23,10 +23,11 @@ class AttendanceDB:
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._init_db()
         self._migrate_db() # 自動檢查並升級欄位
-
+    
     def _get_connection(self):
-        # timeout=60 表示：如果資料庫被鎖住，我願意等 60 秒，這期間若鎖解開了就寫入。
-        return sqlite3.connect(self.db_path, timeout=60.0)
+        conn = sqlite3.connect(self.db_path, timeout=60.0)
+        conn.execute('PRAGMA journal_mode=WAL;')  # WAL模式允許「同時讀寫」
+        return conn
 
     def _init_db(self):
         """初始化基礎表結構"""

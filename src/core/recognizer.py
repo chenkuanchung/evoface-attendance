@@ -127,11 +127,32 @@ class FaceRecognizer:
         # Shape: (N,) -> 每個人的分數
         fused_scores = np.dot(fused_matrix, live_feat)
         
-        # D. 直接找出最高分是誰 (Argmax)
-        best_idx = np.argmax(fused_scores)       # 找出最高分的「索引位置」
-        max_fused_score = float(fused_scores[best_idx]) # 取出該分數
-        best_emp_id = self.emp_ids[best_idx]     # 取出該員工 ID
-        
+        # D. 猶豫邏輯與選出最佳者
+        best_idx = 0
+        score_1st = 0.0
+
+        if len(self.emp_ids) >= 2:
+            # 有兩人以上才進行比較
+            sorted_indices = np.argsort(fused_scores)[::-1]
+            best_idx = sorted_indices[0]
+            second_idx = sorted_indices[1]
+            
+            score_1st = float(fused_scores[best_idx])
+            score_2nd = float(fused_scores[second_idx])
+            
+            ambiguity_th = self.config.get('thresholds', {}).get('ambiguity_gap', 0.05)
+            
+            # 如果差距太小，直接視為辨識失敗
+            if (score_1st - score_2nd) < ambiguity_th:
+                print(f"⚠️ [猶豫] Top1:{self.emp_ids[best_idx]}({score_1st:.2f}) vs Top2:{self.emp_ids[second_idx]}({score_2nd:.2f}) | Gap: {score_1st-score_2nd:.3f}")
+                return None, score_1st, False, {"warning": True, "reason": "ambiguous_gap"}, live_feat
+        else:
+            # 只有一人時
+            best_idx = np.argmax(fused_scores)
+            score_1st = float(fused_scores[best_idx])
+
+        max_fused_score = score_1st
+        best_emp_id = self.emp_ids[best_idx]
         best_base_feat = self.base_matrix[best_idx]
         best_dyn_feat = self.dynamic_matrix[best_idx]
         has_dynamic = self.has_dynamic_flags[best_idx] # 查表看他有沒有真正的 Dynamic
