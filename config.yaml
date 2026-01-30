@@ -69,6 +69,6 @@ thresholds:
 
 # 人臉辨識核心參數設定
 recognition:
-  min_face_ratio: 0.2  # 人臉佔畫面的最小比例 (太遠不偵測)
-  base_weight: 0.4
-  dynamic_weight: 0.6
+  min_face_ratio: 0.15  # 人臉佔畫面的最小比例 (太遠不偵測)
+  base_weight: 0.3
+  dynamic_weight: 0.7

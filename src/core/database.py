@@ -240,6 +240,36 @@ class AttendanceDB:
             return True
 
     # --- 打卡紀錄與日結 ---
+
+    # 檢查該員工是否處於冷卻期 (不寫入，只查詢)
+    def is_cooling_down(self, emp_id):
+        """
+        檢查指定員工 ID 最近一次打卡是否在 debounce_minutes 內。
+        如果是，回傳 (True, 剩餘秒數)；否則回傳 (False, 0)。
+        """
+        now = datetime.now()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT timestamp FROM logs WHERE employee_id = ? ORDER BY timestamp DESC LIMIT 1', (emp_id,))
+            last_log = cursor.fetchone()
+            
+            if last_log:
+                try:
+                    last_time = datetime.strptime(last_log[0].split('.')[0], '%Y-%m-%d %H:%M:%S')
+                except ValueError:
+                    try:
+                        last_time = datetime.strptime(last_log[0], '%Y-%m-%d %H:%M:%S.%f')
+                    except:
+                         return False, 0
+
+                elapsed = (now - last_time).total_seconds()
+                limit_seconds = self.debounce_min * 60
+                
+                if elapsed < limit_seconds:
+                    return True, int(limit_seconds - elapsed)
+        
+        return False, 0
+
     def add_attendance_log(self, emp_id, confidence, photo_path, details=None):
         now = datetime.now()
         base_s = details.get('base_score', 0.0) if details else 0.0

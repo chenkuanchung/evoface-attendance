@@ -9,7 +9,9 @@ from src.utils.image_tool import ImagePreprocessor
 
 class FaceRecognizer:
     """
-    辨識核心 (V2.1)：支援特徵加權融合、口罩模式對齊與詳細來源追蹤。
+    辨識核心：
+    1. 修正特徵向量未正規化導致分數暴衝 (15.x) 的問題。
+    2. 確保特徵演進時權重正確 (原本因向量過大導致 Soft Update 失效)。
     """
     def __init__(self, config_path="config.yaml"):
         with open(config_path, 'r', encoding='utf-8') as f:
@@ -40,25 +42,25 @@ class FaceRecognizer:
 
     def reload_employees(self):
         """
-        [效能優化] 將所有員工資料轉為 Numpy 矩陣 (Cache)，避免每次辨識都讀資料庫。
+        將所有員工資料轉為 Numpy 矩陣 (Cache)。
         """
         all_data = self.db.load_all_employees()
         
         self.emp_ids = []           # 順序對應的 ID 列表
         self.base_feats = []        # 原始特徵列表
         self.dynamic_feats = []     # 動態特徵列表
-        self.has_dynamic_flags = [] # 標記該員工是否有動態特徵 (演進邏輯用)
+        self.has_dynamic_flags = [] # 標記該員工是否有動態特徵
         
         for eid, data in all_data.items():
             self.emp_ids.append(eid)
             self.base_feats.append(data['base'])
             
-            # 處理動態特徵：如果沒有，就暫時用 base 填補 (為了矩陣形狀一致)
+            # 處理動態特徵：如果沒有，就暫時用 base 填補
             if data['dynamic'] is not None:
                 self.dynamic_feats.append(data['dynamic'])
                 self.has_dynamic_flags.append(True)
             else:
-                self.dynamic_feats.append(data['base']) # 用 Base 填補空缺
+                self.dynamic_feats.append(data['base'])
                 self.has_dynamic_flags.append(False)
                 
         # 轉為 Numpy 矩陣，形狀為 (N, 512)
@@ -67,7 +69,6 @@ class FaceRecognizer:
             self.dynamic_matrix = np.array(self.dynamic_feats)
             self.has_dynamic_flags = np.array(self.has_dynamic_flags)
         else:
-            # 防止資料庫為空時報錯
             self.base_matrix = np.empty((0, 512))
             self.dynamic_matrix = np.empty((0, 512))
             self.has_dynamic_flags = np.array([])
@@ -78,53 +79,51 @@ class FaceRecognizer:
         """
         從已對齊的 112x112 影像中提取特徵向量。
         """
-        # 1. 基本防呆
         if aligned_face is None: 
             return None
-            
-        # 2. 繞過 FaceAnalysis 的封裝，直接取得內部的 ArcFace 辨識模型
-        # 原因：app.get() 會強制重做一次人臉偵測，對於已裁切的 112x112 圖片極易失敗。
-        rec_model = self.app.models['recognition'] 
         
-        # 3. 直接進行特徵提取 (Inference Only)
-        # 輸入必須是 (112, 112, 3) 的 BGR 圖片
+        # 繞過 FaceAnalysis 的封裝，直接取得內部的 ArcFace 辨識模型
+        rec_model = self.app.models['recognition'] 
         feat = rec_model.get_feat(aligned_face)
         
-        # 4. 確保回傳格式為一維陣列 (512,)
-        # 有些版本會回傳 (1, 512)，使用 flatten() 統一攤平最安全
         if feat is not None:
             return feat.flatten()
             
         return None
 
     def compute_similarity(self, feat1, feat2):
-        """計算餘弦相似度"""
+        """計算餘弦相似度 (單一比對用)"""
+        # 這裡原本就有除以 norm，所以單獨算 base_score 時是對的 (0.54)
         return np.dot(feat1, feat2) / (np.linalg.norm(feat1) * np.linalg.norm(feat2))
 
     def identify(self, processed_face):
         """
         執行 1:N 加權比對邏輯 (矩陣加速版)
         """
-        # 1. 提取鏡頭前的人臉特徵
-        live_feat = self.extract_feature(processed_face)
-        if live_feat is None:
+        # 1. 提取鏡頭前的人臉特徵 (原始長度約 20~25)
+        live_feat_raw = self.extract_feature(processed_face)
+        if live_feat_raw is None:
             return None, 0.0, False, {}, None
+
+        # [CRITICAL FIX] 必須先將 live_feat 正規化 (長度變為 1)
+        # 否則矩陣乘法出來的分數會暴衝到 10~20
+        norm = np.linalg.norm(live_feat_raw)
+        live_feat = live_feat_raw / (norm + 1e-10)
 
         # 如果沒人或矩陣沒初始化
         if not hasattr(self, 'base_matrix') or self.base_matrix.shape[0] == 0:
              return None, 0.0, False, {}, live_feat
         
-        # A. 融合特徵 (一次算出所有人的融合特徵) Shape: (N, 512)
+        # A. 融合特徵 (一次算出所有人的融合特徵)
         fused_matrix = (self.base_matrix * self.base_weight) + (self.dynamic_matrix * self.dynamic_weight)
         
-        # B. 矩陣正規化 (L2 Norm)，確保長度為 1
-        # axis=1 代表對每一個 row (每個人) 算長度
+        # B. 矩陣正規化 (L2 Norm)，確保資料庫裡的特徵長度也是 1
         norms = np.linalg.norm(fused_matrix, axis=1, keepdims=True)
-        norms[norms == 0] = 1e-10 # 避免除以 0
+        norms[norms == 0] = 1e-10 
         fused_matrix = fused_matrix / norms
         
-        # C. 計算相似度 (一次算出 live_feat 跟 4000 人的分數)
-        # Shape: (N,) -> 每個人的分數
+        # C. 計算相似度 (Normalized Dot Product)
+        # 現在兩邊長度都是 1，算出來一定是 -1 ~ 1 之間
         fused_scores = np.dot(fused_matrix, live_feat)
         
         # D. 猶豫邏輯與選出最佳者
@@ -132,7 +131,6 @@ class FaceRecognizer:
         score_1st = 0.0
 
         if len(self.emp_ids) >= 2:
-            # 有兩人以上才進行比較
             sorted_indices = np.argsort(fused_scores)[::-1]
             best_idx = sorted_indices[0]
             second_idx = sorted_indices[1]
@@ -142,12 +140,10 @@ class FaceRecognizer:
             
             ambiguity_th = self.config.get('thresholds', {}).get('ambiguity_gap', 0.05)
             
-            # 如果差距太小，直接視為辨識失敗
             if (score_1st - score_2nd) < ambiguity_th:
-                print(f"⚠️ [猶豫] Top1:{self.emp_ids[best_idx]}({score_1st:.2f}) vs Top2:{self.emp_ids[second_idx]}({score_2nd:.2f}) | Gap: {score_1st-score_2nd:.3f}")
+                print(f"⚠️ [猶豫] Top1:{self.emp_ids[best_idx]}({score_1st:.2f}) vs Top2:{self.emp_ids[second_idx]}({score_2nd:.2f})")
                 return None, score_1st, False, {"warning": True, "reason": "ambiguous_gap"}, live_feat
         else:
-            # 只有一人時
             best_idx = np.argmax(fused_scores)
             score_1st = float(fused_scores[best_idx])
 
@@ -155,31 +151,27 @@ class FaceRecognizer:
         best_emp_id = self.emp_ids[best_idx]
         best_base_feat = self.base_matrix[best_idx]
         best_dyn_feat = self.dynamic_matrix[best_idx]
-        has_dynamic = self.has_dynamic_flags[best_idx] # 查表看他有沒有真正的 Dynamic
+        has_dynamic = self.has_dynamic_flags[best_idx]
         
-        # 單獨計算 Base 分數 (為了警告判斷)
+        # 這裡傳入 normalized 的 live_feat，確保 base_score 計算正確
         base_score = float(self.compute_similarity(live_feat, best_base_feat))
         
-        # 單獨計算 Dynamic 分數 (為了演進判斷)
         dyn_score = 0.0
         if has_dynamic:
             dyn_score = float(self.compute_similarity(live_feat, best_dyn_feat))
             
-        # 診斷輸出 (只印最高分的，避免 4000 行洗版)
+        # 診斷輸出 (現在應該會看到 0.7, 0.8 這種正常分數了)
         if max_fused_score > 0.4:
              print(f"📊 [診斷] ID: {best_emp_id} | 總分: {max_fused_score:.2f} | Base: {base_score:.2f} | Dynamic: {dyn_score:.2f}")
 
         should_evolve = False
         if has_dynamic:
-            # 既有邏輯：Base 不錯 或 Dynamic 很好
             if base_score > self.evo_min_base or dyn_score > self.evo_min_dyn:
                 should_evolve = True
         else:
-            # 冷啟動邏輯
             if max_fused_score > self.evo_threshold:
                 should_evolve = True
 
-        # 警告邏輯
         low_base_warning = (base_score < self.warn_base_th)
 
         final_details = {
@@ -187,11 +179,10 @@ class FaceRecognizer:
             "dynamic_score": dyn_score,
             "fused_score": max_fused_score,
             "warning": low_base_warning,
-            # 如果有 Dynamic，傳回舊的供融合；如果沒有，傳回 None
-            "matched_old_dynamic": best_dyn_feat if has_dynamic else None
+            "matched_old_dynamic": best_dyn_feat if has_dynamic else None,
+            "candidate_id": best_emp_id
         }
 
-        # 最後門檻判定 (0.5)
         if max_fused_score >= self.rec_threshold:
             return best_emp_id, max_fused_score, should_evolve, final_details, live_feat
         
@@ -199,38 +190,38 @@ class FaceRecognizer:
 
     def process_attendance(self, emp_id, score, should_evolve, live_feat, photo_path, details):
         """
-        處理打卡儲存與演進。
-        直接傳入 identify 階段已取得的 live_feat
+        處理打卡儲存與演進 (含記憶體熱更新)
         """
+        # 注意：若有 debounce (打卡太頻繁)，success 會是 False，演進會被跳過
         success, message = self.db.add_attendance_log(emp_id, score, photo_path, details)
         
         if success and should_evolve:
-            # 額外安全性檢查：若原始特徵比對分數過低 (可能戴口罩)，則不更新動態特徵
             base_s = details.get('base_score', 0.0)
             if base_s < 0.4:
-                return success, message + " (辨識成功，跳過特徵演進: 與原始照差異過大)"
+                return success, message + " (辨識成功，跳過演進: 差異過大)"
 
             if live_feat is not None:          
-                # 1. 取得舊的 Dynamic Feature
                 old_dynamic = details.get("matched_old_dynamic")
 
                 if old_dynamic is not None:
-                    # 設定學習率 alpha
                     alpha = 0.1 
-                    
-                    # 公式: New = alpha * Live + (1-alpha) * Old
                     new_dynamic = (alpha * live_feat) + ((1 - alpha) * old_dynamic)
-                    
-                    # 重新正規化 (L2 Norm)
                     new_dynamic = new_dynamic / np.linalg.norm(new_dynamic)
-                    
                     print(f"🌊 [Soft Update] 融合舊特徵 (Alpha={alpha})")
                 else:
-                    # 冷啟動：如果原本沒有 Dynamic，直接使用新的
-                    new_dynamic = live_feat
+                    new_dynamic = live_feat # 冷啟動
+                    print(f"🌱 [Cold Start] 建立初始動態特徵")
 
-                # 2. 寫入資料庫
+                # 1. 寫入資料庫
                 self.db.update_dynamic_feature(emp_id, new_dynamic)
+                
+                # 2. 同步更新記憶體中的矩陣
+                if emp_id in self.emp_ids:
+                    idx = self.emp_ids.index(emp_id)
+                    self.dynamic_matrix[idx] = new_dynamic
+                    self.has_dynamic_flags[idx] = True
+                    print(f"🧠 [Memory Update] 記憶體特徵已同步 (ID: {emp_id})")
+
                 message += " (特徵已柔和演進)"
 
         return success, message
